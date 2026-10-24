@@ -27,6 +27,8 @@
 #define TAG "OttoRobot"
 
 extern void InitializeOttoController(const HardwareConfig& hw_config);
+extern void StopOttoActions();
+extern bool IsOttoMoving();
 
 class OttoRobot : public WifiBoard {
 private:
@@ -255,6 +257,10 @@ private:
                 EnterWifiConfigMode();
                 return;
             }
+            if (IsOttoMoving()) {
+                StopOttoActions();
+                return;
+            }
             app.ToggleChatState();
         });
     }
@@ -415,6 +421,8 @@ public:
     }
 
     virtual Camera* GetCamera() override { return has_camera_ ? camera_ : nullptr; }
+
+    virtual void OnNetworkDisconnected() override { StopOttoActions(); }
 };
 
 DECLARE_BOARD(OttoRobot);
