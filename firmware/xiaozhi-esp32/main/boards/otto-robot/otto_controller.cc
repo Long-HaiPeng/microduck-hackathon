@@ -794,11 +794,13 @@ public:
                 }
             });
 
-        // 舵机序列工具（支持分段发送，每次发送一个序列，自动排队执行）
+        // 默认不向云端注册任意舵机序列工具。保留代码供本地调试时显式开启；
+        // 默认构建使用 constexpr 丢弃该分支，工具描述也不会进入固件。
+        if constexpr (kEnableRemoteServoSequences) {
         mcp_server.AddTool(
             "self.otto.servo_sequences",
-            "该工具在本版本被禁用。云端不得发送任意舵机序列；请使用 self.otto.action "
-            "的受限动作集合。"
+            "本地调试专用。仅在显式开启远程舵机序列时注册；常规固件不向云端暴露此工具。"
+            "云端应使用 self.otto.action 的受限动作集合。"
             "本说明保留原有参数格式，仅用于兼容本地调试："
             "机器人结构：双手可上下摆动，双腿可内收外展，双脚可上下翻转。"
             "舵机说明："
@@ -848,15 +850,13 @@ public:
             PropertyList({Property("sequence", kPropertyTypeString,
                                    "{\"a\":[{\"s\":{\"ll\":90,\"rl\":90},\"v\":1000}]}")}),
             [this](const PropertyList& properties) -> ReturnValue {
-                if (!kEnableRemoteServoSequences) {
-                    return "错误：任意舵机序列工具在当前机器人固件中已禁用";
-                }
                 std::string sequence = properties["sequence"].value<std::string>();
                 // 检查是否是JSON对象（可能是字符串格式或已解析的对象）
                 // 如果sequence是JSON字符串，直接使用；如果是对象字符串，也需要使用
                 QueueServoSequence(sequence.c_str());
                 return true;
             });
+        }
 
         mcp_server.AddTool("self.otto.stop", "立即停止所有动作并复位", PropertyList(),
                            [this](const PropertyList& properties) -> ReturnValue {
