@@ -323,6 +323,8 @@ void Application::HandleNetworkConnectedEvent() {
 }
 
 void Application::HandleNetworkDisconnectedEvent() {
+    Board::GetInstance().OnNetworkDisconnected();
+
     // Close current conversation when network disconnected
     auto state = GetDeviceState();
     if (state == kDeviceStateNotifying) {
@@ -559,6 +561,8 @@ void Application::InitializeProtocol() {
 
     protocol_->OnConnected([this]() { DismissAlert(); });
 
+    protocol_->OnDisconnected([]() { Board::GetInstance().OnNetworkDisconnected(); });
+
     protocol_->OnNetworkError([this](const std::string& message) {
         last_error_message_ = message;
         xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
@@ -640,8 +644,13 @@ void Application::InitializeProtocol() {
                     SetDeviceState(kDeviceStateSpeaking);
                 });
             } else if (strcmp(state->valuestring, "stop") == 0) {
-                Schedule([this]() {
+                auto is_aborted = cJSON_GetObjectItem(root, "is_aborted");
+                const bool aborted = cJSON_IsBool(is_aborted) && cJSON_IsTrue(is_aborted);
+                Schedule([this, aborted]() {
                     if (GetDeviceState() == kDeviceStateSpeaking) {
+                        if (aborted) {
+                            audio_service_.ResetDecoder();
+                        }
                         if (listening_mode_ == kListeningModeManualStop) {
                             SetDeviceState(kDeviceStateIdle);
                         } else {
@@ -1256,6 +1265,9 @@ void Application::Schedule(std::function<void()>&& callback) {
 void Application::AbortSpeaking(AbortReason reason) {
     ESP_LOGI(TAG, "Abort speaking");
     aborted_ = true;
+    audio_service_.ResetDecoder();
+    while (audio_service_.PopPacketFromSendQueue()) {
+    }
     if (protocol_) {
         protocol_->SendAbortSpeaking(reason);
     }

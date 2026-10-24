@@ -9,7 +9,9 @@
                 "camera_vflip": true
             },
             "sdkconfig_append": [
+                "CONFIG_OTA_URL=\"https://xrobo.qiniuapi.com/v1/ota/\"",
                 "CONFIG_HTTPD_WS_SUPPORT=y",
+                "CONFIG_USE_SERVER_AEC=y",
                 "CONFIG_CAMERA_OV2640=y",
                 "CONFIG_CAMERA_OV3660=y"
             ]
