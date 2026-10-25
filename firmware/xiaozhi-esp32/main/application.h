@@ -97,6 +97,12 @@ public:
     void ToggleChatState();
 
     /**
+     * Listening mode control (thread-safe, used by board buttons)
+     */
+    ListeningMode listening_mode() const { return listening_mode_; }
+    void SwitchListeningMode(ListeningMode mode);
+
+    /**
      * Start listening (event-based, thread-safe)
      * Sends MAIN_EVENT_START_LISTENING to be handled in Run()
      */

@@ -99,6 +99,20 @@ void Protocol::SendStopListening() {
     SendText(message);
 }
 
+void Protocol::SendListenMode(ListeningMode mode) {
+    const char* mode_str = "manual";
+    if (mode == kListeningModeRealtime) {
+        mode_str = "realtime";
+    } else if (mode == kListeningModeAutoStop) {
+        mode_str = "auto";
+    }
+    std::string message = "{\"session_id\":\"" + session_id_ + "\"";
+    message += ",\"type\":\"listen\",\"mode\":\"";
+    message += mode_str;
+    message += "\"}";
+    SendText(message);
+}
+
 void Protocol::SendMcpMessage(const std::string& payload) {
     std::string message =
         "{\"session_id\":\"" + session_id_ + "\",\"type\":\"mcp\",\"payload\":" + payload + "}";
