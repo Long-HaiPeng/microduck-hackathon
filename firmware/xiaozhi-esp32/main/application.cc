@@ -1033,9 +1033,9 @@ void Application::HandleStateChangedEvent() {
             // queues STATE_CHANGED after Alert(), and the idle handler would
             // otherwise wipe the status, emotion, and chat message.
             if (last_error_message_.empty()) {
-                display->SetStatus(IdleStatusText());
+                display->SetStatus(IdleStatusText().c_str());
                 display->ClearChatMessages();  // Clear messages first
-                display->SetChatMessage("system", IdleHelpText());
+                display->SetChatMessage("system", IdleHelpText().c_str());
                 display->SetEmotion(
                     "neutral");  // Then set emotion (wechat mode checks child count)
             }
@@ -1291,7 +1291,7 @@ void Application::SwitchListeningMode(ListeningMode mode) {
         // Refresh the idle status bar so the shown mode stays in sync.
         if (state_machine_.GetState() == kDeviceStateIdle &&
             last_error_message_.empty()) {
-            Board::GetInstance().GetDisplay()->SetStatus(IdleStatusText());
+            Board::GetInstance().GetDisplay()->SetStatus(IdleStatusText().c_str());
         }
     });
 }
