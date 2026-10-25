@@ -1308,10 +1308,17 @@ std::string Application::IdleStatusText() const {
 
 std::string Application::IdleHelpText() const {
 #if CONFIG_LANGUAGE_ZH_CN
-    return "单击=对话/急停  长按=说话  双击=切模式\n试试对它说: 走两步 / 挥挥手 / 笑一个";
+    std::string text = "单击=对话/急停  长按=说话  双击=切模式\n三击=换服务器  试试说: 走两步 / 挥挥手";
 #else
-    return "Click=Chat/Stop  Hold=Talk  DblClick=Mode\nTry: walk / wave / smile";
+    std::string text = "Click=Chat/Stop  Hold=Talk  DblClick=Mode\nTripleClick=Server  Try: walk / wave";
 #endif
+    // 显示当前灵矽环境（NVS ota_url 为空时默认正式环境）
+    Settings settings("wifi", false);
+    std::string url = settings.GetString("ota_url");
+    const char* env =
+        (url.find("xrobo-k8") != std::string::npos) ? "灵矽测试" : "灵矽正式";
+    text += std::string("\n服务器: ") + env;
+    return text;
 }
 
 ListeningMode Application::GetDefaultListeningMode() const {
