@@ -7,6 +7,7 @@
 #include <esp_app_desc.h>
 #include <esp_log.h>
 #include <esp_pthread.h>
+#include <esp_system.h>
 #include <algorithm>
 #include <cstring>
 #include <iterator>
@@ -59,6 +60,20 @@ void McpServer::AddCommonTools() {
                 return true;
             });
 
+    AddTool("self.system.restart",
+            "Restart the robot after a 1-second delay. Ask the user to confirm before calling "
+            "this tool.",
+            PropertyList(),
+            [](const PropertyList& properties) -> ReturnValue {
+                auto& app = Application::GetInstance();
+                app.Schedule([]() {
+                    ESP_LOGW(TAG, "Restart requested via MCP tool");
+                    vTaskDelay(pdMS_TO_TICKS(1000));
+                    esp_restart();
+                });
+                return true;
+            });
+
     auto backlight = board.GetBacklight();
     if (backlight) {
         AddTool("self.screen.set_brightness", "Set the brightness of the screen.",
@@ -87,6 +102,20 @@ void McpServer::AddCommonTools() {
                     }
                     return false;
                 });
+
+        AddTool(
+            "self.display.set_emotion",
+            "Set the emotion face shown on the robot's screen. Use this to express feelings "
+            "during the conversation, e.g. when telling a story or reacting to the user. Choose "
+            "one from: neutral, happy, laughing, funny, silly, loving, kissy, sad, crying, angry, "
+            "surprised, shocked, thinking, winking, cool, confident, relaxed, sleepy, "
+            "embarrassed, delicious, confused, staticstate.",
+            PropertyList({Property("emotion", kPropertyTypeString)}),
+            [display](const PropertyList& properties) -> ReturnValue {
+                auto emotion = properties["emotion"].value<std::string>();
+                display->SetEmotion(emotion.c_str());
+                return true;
+            });
     }
 
     auto camera = board.GetCamera();
