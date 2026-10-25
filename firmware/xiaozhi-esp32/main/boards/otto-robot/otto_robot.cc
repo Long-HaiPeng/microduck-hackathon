@@ -6,6 +6,7 @@
 #include <esp_lcd_panel_vendor.h>
 #include <esp_log.h>
 #include <esp_rom_sys.h>
+#include <esp_system.h>
 #include <esp_timer.h>
 
 #include <new>
@@ -21,6 +22,7 @@
 #include "mcp_server.h"
 #include "otto_emoji_display.h"
 #include "power_manager.h"
+#include "settings.h"
 #include "system_reset.h"
 #include "websocket_control_server.h"
 #include "wifi_board.h"
@@ -314,6 +316,34 @@ private:
                 });
             }
         });
+
+        boot_button_.OnMultipleClick([this]() {
+            auto& app = Application::GetInstance();
+            // 仅空闲态响应，避免对话/动作中误触重启
+            if (app.GetDeviceState() != kDeviceStateIdle || ptt_active_) {
+                return;
+            }
+            // 三击循环切换灵矽环境：正式 <-> 测试（持久化到 NVS，重启生效）
+            static const char* kOtaUrls[] = {
+                "https://xrobo.qiniuapi.com/v1/ota/",   // 灵矽正式
+                "http://xrobo-k8.qiniu.io/xiaozhi/ota/" // 灵矽测试
+            };
+            static const char* kOtaNames[] = {"灵矽正式", "灵矽测试"};
+            Settings settings("wifi", true);
+            std::string cur = settings.GetString("ota_url");
+            int cur_idx = (cur.find("xrobo-k8") != std::string::npos) ? 1 : 0;
+            int next = 1 - cur_idx;
+            settings.SetString("ota_url", kOtaUrls[next]);
+            ESP_LOGI(TAG, "OTA env -> %s (%s)", kOtaNames[next], kOtaUrls[next]);
+            if (display_ != nullptr) {
+                std::string msg = std::string("已切换 ") + kOtaNames[next] + " · 重启生效";
+                display_->SetStatus(msg.c_str());
+            }
+            app.Schedule([]() {
+                vTaskDelay(pdMS_TO_TICKS(2000));
+                esp_restart();
+            });
+        }, 3);
 
         boot_button_.OnClick([this]() {
             auto& app = Application::GetInstance();
