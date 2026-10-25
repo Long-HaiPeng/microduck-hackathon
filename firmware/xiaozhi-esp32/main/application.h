@@ -189,6 +189,8 @@ private:
     void ActivationTask();
 
     // Helper methods
+    std::string IdleStatusText() const;
+    std::string IdleHelpText() const;
     void CheckAssetsVersion();
     void CheckNewVersion();
     void InitializeProtocol();
