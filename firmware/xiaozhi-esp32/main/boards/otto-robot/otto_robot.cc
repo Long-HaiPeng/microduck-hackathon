@@ -6,6 +6,7 @@
 #include <esp_lcd_panel_vendor.h>
 #include <esp_log.h>
 #include <esp_rom_sys.h>
+#include <esp_timer.h>
 
 #include <new>
 
@@ -43,6 +44,11 @@ private:
     bool is_camera_board_;
     bool has_camera_;
     OttoCameraType camera_type_;
+    // 长按对讲（PTT）：按下后短于该时长视为单击，达到该时长进入对讲
+    esp_timer_handle_t ptt_timer_ = nullptr;
+    bool ptt_active_ = false;
+    // 用户双击选择的拾音模式（PTT 借用 manual 语义后据此恢复）
+    ListeningMode persistent_mode_ = kListeningModeAutoStop;
 
     bool DetectHardwareVersion() {
         constexpr gpio_num_t kDetectGpio15 = GPIO_NUM_15;
@@ -251,6 +257,64 @@ private:
     }
 
     void InitializeButtons() {
+        // 长按 PTT 判定定时器：按住 400ms 仍未松开则进入对讲模式
+        esp_timer_create_args_t ptt_timer_args = {
+            .callback = [](void* arg) { static_cast<OttoRobot*>(arg)->PttStart(); },
+            .arg = this,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "ptt_timer",
+            .skip_unhandled_events = true,
+        };
+        ESP_ERROR_CHECK(esp_timer_create(&ptt_timer_args, &ptt_timer_));
+
+        boot_button_.OnPressDown([this]() {
+            if (Application::GetInstance().GetDeviceState() == kDeviceStateStarting) {
+                return;
+            }
+            if (IsOttoMoving()) {
+                return;  // 动作执行中按键交给单击急停，不进入对讲
+            }
+            ptt_active_ = false;
+            esp_timer_stop(ptt_timer_);
+            esp_timer_start_once(ptt_timer_, 400 * 1000);
+        });
+
+        boot_button_.OnPressUp([this]() {
+            esp_timer_stop(ptt_timer_);
+            if (ptt_active_) {
+                PttStop();
+            }
+        });
+
+        boot_button_.OnDoubleClick([this]() {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting || ptt_active_) {
+                return;
+            }
+            // 双击循环切换拾音模式：realtime -> auto -> manual
+            ListeningMode mode = persistent_mode_;
+            if (mode == kListeningModeRealtime) {
+                mode = kListeningModeAutoStop;
+            } else if (mode == kListeningModeAutoStop) {
+                mode = kListeningModeManualStop;
+            } else {
+                mode = kListeningModeRealtime;
+            }
+            persistent_mode_ = mode;
+            app.SwitchListeningMode(mode);
+            const char* mode_name =
+                (mode == kListeningModeRealtime) ? "Realtime"
+                : (mode == kListeningModeAutoStop) ? "Auto" : "Manual";
+            ESP_LOGI(TAG, "Listen mode -> %s", mode_name);
+            if (display_ != nullptr) {
+                Application::GetInstance().Schedule([this, mode_name]() {
+                    if (display_ != nullptr) {
+                        display_->SetStatus(mode_name);
+                    }
+                });
+            }
+        });
+
         boot_button_.OnClick([this]() {
             auto& app = Application::GetInstance();
             if (app.GetDeviceState() == kDeviceStateStarting) {
@@ -261,8 +325,38 @@ private:
                 StopOttoActions();
                 return;
             }
+            if (ptt_active_) {
+                return;  // 长按松开后附加的单击事件，忽略
+            }
             app.ToggleChatState();
         });
+    }
+
+    void PttStart() {
+        if (ptt_active_) {
+            return;
+        }
+        auto& app = Application::GetInstance();
+        auto state = app.GetDeviceState();
+        if (state != kDeviceStateIdle && state != kDeviceStateSpeaking &&
+            state != kDeviceStateListening) {
+            return;
+        }
+        ptt_active_ = true;
+        app.StartListening();  // 上游 manual 链路：打断播报 + 开启采集
+        ESP_LOGI(TAG, "PTT start (hold to talk)");
+    }
+
+    void PttStop() {
+        if (!ptt_active_) {
+            return;
+        }
+        ptt_active_ = false;
+        auto& app = Application::GetInstance();
+        app.StopListening();  // 停止采集并提交语音，回到 Idle
+        // PTT 借用了 manual 会话语义，结束后恢复用户选择的拾音模式
+        app.SwitchListeningMode(persistent_mode_);
+        ESP_LOGI(TAG, "PTT stop (release to send)");
     }
 
     void InitializeOttoController() { ::InitializeOttoController(hw_config_); }
