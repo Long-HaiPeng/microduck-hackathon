@@ -1033,8 +1033,9 @@ void Application::HandleStateChangedEvent() {
             // queues STATE_CHANGED after Alert(), and the idle handler would
             // otherwise wipe the status, emotion, and chat message.
             if (last_error_message_.empty()) {
-                display->SetStatus(Lang::Strings::STANDBY);
+                display->SetStatus(IdleStatusText());
                 display->ClearChatMessages();  // Clear messages first
+                display->SetChatMessage("system", IdleHelpText());
                 display->SetEmotion(
                     "neutral");  // Then set emotion (wechat mode checks child count)
             }
@@ -1287,7 +1288,30 @@ void Application::SwitchListeningMode(ListeningMode mode) {
         if (protocol_ && protocol_->IsAudioChannelOpened()) {
             protocol_->SendListenMode(listening_mode_);
         }
+        // Refresh the idle status bar so the shown mode stays in sync.
+        if (state_machine_.GetState() == kDeviceStateIdle &&
+            last_error_message_.empty()) {
+            Board::GetInstance().GetDisplay()->SetStatus(IdleStatusText());
+        }
     });
+}
+
+std::string Application::IdleStatusText() const {
+    const char* mode = "realtime";
+    if (listening_mode_ == kListeningModeAutoStop) {
+        mode = "auto";
+    } else if (listening_mode_ == kListeningModeManualStop) {
+        mode = "manual";
+    }
+    return std::string(Lang::Strings::STANDBY) + " · " + mode;
+}
+
+std::string Application::IdleHelpText() const {
+#if CONFIG_LANGUAGE_ZH_CN
+    return "单击=对话/急停  长按=说话  双击=切模式\n试试对它说: 走两步 / 挥挥手 / 笑一个";
+#else
+    return "Click=Chat/Stop  Hold=Talk  DblClick=Mode\nTry: walk / wave / smile";
+#endif
 }
 
 ListeningMode Application::GetDefaultListeningMode() const {
