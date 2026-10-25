@@ -1278,6 +1278,18 @@ void Application::SetListeningMode(ListeningMode mode) {
     SetDeviceState(kDeviceStateListening);
 }
 
+void Application::SwitchListeningMode(ListeningMode mode) {
+    listening_mode_ = mode;
+    ESP_LOGI(TAG, "Listening mode switched to %d", static_cast<int>(mode));
+    // 通知服务端会话模式：realtime/auto 影响服务端探测式打断行为，
+    // manual 关闭 VAD 探测（仅显式 listen.start/stop 驱动）。
+    Schedule([this]() {
+        if (protocol_ && protocol_->IsAudioChannelOpened()) {
+            protocol_->SendListenMode(listening_mode_);
+        }
+    });
+}
+
 ListeningMode Application::GetDefaultListeningMode() const {
     return aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime;
 }
