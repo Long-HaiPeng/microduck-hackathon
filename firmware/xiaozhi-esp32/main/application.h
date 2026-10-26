@@ -101,6 +101,10 @@ public:
      */
     ListeningMode listening_mode() const { return listening_mode_; }
     void SwitchListeningMode(ListeningMode mode);
+    // 对话开始/唤醒时沿用用户当前所选拾音模式，而不是重置为默认模式
+    void SetUseSelectedListeningMode(bool use) { use_selected_listening_mode_ = use; }
+    // 待机状态栏文本：时钟 + 拾音模式（如 "23:45 · realtime"），供显示层复用
+    std::string IdleStatusText() const;
 
     /**
      * Start listening (event-based, thread-safe)
@@ -144,6 +148,8 @@ private:
     esp_timer_handle_t startup_wake_word_hint_timer_ = nullptr;
     DeviceStateMachine state_machine_;
     ListeningMode listening_mode_ = kListeningModeAutoStop;
+    // true 时对话开始/唤醒沿用 listening_mode_，false 时重置为默认模式（上游行为）
+    bool use_selected_listening_mode_ = false;
     AecMode aec_mode_ = kAecOff;
     std::string last_error_message_;
     std::string startup_wake_word_hint_message_;
@@ -162,6 +168,9 @@ private:
     bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
     bool pending_listening_start_ = false;  // Waiting for playback to drain before starting listening (auto mode)
     int clock_ticks_ = 0;
+    // realtime 本地打断（服务端无 barge-in 时的兜底）：防回声误触的时间窗
+    int64_t speaking_start_ms_ = 0;
+    int64_t last_local_interrupt_ms_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
 
 
@@ -189,14 +198,17 @@ private:
     void ActivationTask();
 
     // Helper methods
-    std::string IdleStatusText() const;
     std::string IdleHelpText() const;
+    // 待机中刷新帮助卡片（天气表盘数据到达时调用，需在主线程）
+    void RefreshIdleHelp();
     void CheckAssetsVersion();
     void CheckNewVersion();
     void InitializeProtocol();
     void ShowActivationCode(const std::string& code, const std::string& message);
     void SetListeningMode(ListeningMode mode);
     ListeningMode GetDefaultListeningMode() const;
+    // 对话开始时的实际拾音模式：板子开启 use_selected_listening_mode_ 时沿用用户所选
+    ListeningMode ResolveStartListeningMode() const;
     
     // State change handler called by state machine
     void OnStateChanged(DeviceState old_state, DeviceState new_state);

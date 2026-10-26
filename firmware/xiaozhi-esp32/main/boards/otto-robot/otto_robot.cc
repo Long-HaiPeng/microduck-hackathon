@@ -21,6 +21,7 @@
 #include "led/single_led.h"
 #include "mcp_server.h"
 #include "otto_emoji_display.h"
+#include "otto_audio_codec.h"
 #include "power_manager.h"
 #include "settings.h"
 #include "system_reset.h"
@@ -49,8 +50,8 @@ private:
     // 长按对讲（PTT）：按下后短于该时长视为单击，达到该时长进入对讲
     esp_timer_handle_t ptt_timer_ = nullptr;
     bool ptt_active_ = false;
-    // 用户双击选择的拾音模式（PTT 借用 manual 语义后据此恢复）
-    ListeningMode persistent_mode_ = kListeningModeAutoStop;
+    // 用户双击选择的拾音模式（PTT 借用 manual 语义后据此恢复；单击对话开始前也会应用）
+    ListeningMode persistent_mode_ = kListeningModeRealtime;
 
     bool DetectHardwareVersion() {
         constexpr gpio_num_t kDetectGpio15 = GPIO_NUM_15;
@@ -308,13 +309,7 @@ private:
                 (mode == kListeningModeRealtime) ? "Realtime"
                 : (mode == kListeningModeAutoStop) ? "Auto" : "Manual";
             ESP_LOGI(TAG, "Listen mode -> %s", mode_name);
-            if (display_ != nullptr) {
-                Application::GetInstance().Schedule([this, mode_name]() {
-                    if (display_ != nullptr) {
-                        display_->SetStatus(mode_name);
-                    }
-                });
-            }
+            // 状态栏文本由 SwitchListeningMode 统一刷新（IdleStatusText），不再单独覆盖
         });
 
         boot_button_.OnMultipleClick([this]() {
@@ -358,6 +353,9 @@ private:
             if (ptt_active_) {
                 return;  // 长按松开后附加的单击事件，忽略
             }
+            // 单击开启对话前先恢复双击选择的拾音模式：
+            // 上游在对话开始时会把模式重置为默认，这里保住用户的选择
+            app.SwitchListeningMode(persistent_mode_);
             app.ToggleChatState();
         });
     }
@@ -458,13 +456,13 @@ private:
 
     void InitializeAudioCodec() {
         if (hw_config_.audio_use_simplex) {
-            audio_codec_ = new NoAudioCodecSimplex(
+            audio_codec_ = new OttoAudioCodecSimplex(
                 hw_config_.audio_input_sample_rate, hw_config_.audio_output_sample_rate,
                 hw_config_.audio_i2s_spk_gpio_bclk, hw_config_.audio_i2s_spk_gpio_lrck,
                 hw_config_.audio_i2s_spk_gpio_dout, hw_config_.audio_i2s_mic_gpio_sck,
                 hw_config_.audio_i2s_mic_gpio_ws, hw_config_.audio_i2s_mic_gpio_din);
         } else {
-            audio_codec_ = new NoAudioCodecDuplex(
+            audio_codec_ = new OttoAudioCodecDuplex(
                 hw_config_.audio_input_sample_rate, hw_config_.audio_output_sample_rate,
                 hw_config_.audio_i2s_gpio_bclk, hw_config_.audio_i2s_gpio_ws,
                 hw_config_.audio_i2s_gpio_dout, hw_config_.audio_i2s_gpio_din);
@@ -512,6 +510,8 @@ public:
         InitializeButtons();
         InitializePowerManager();
         InitializeAudioCodec();
+        // 对话开始/唤醒沿用双击所选拾音模式，不重置为默认模式
+        Application::GetInstance().SetUseSelectedListeningMode(true);
 
         if (has_camera_) {
             if (!InitializeCamera()) {

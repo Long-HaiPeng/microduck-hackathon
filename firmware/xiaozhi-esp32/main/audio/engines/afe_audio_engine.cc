@@ -135,7 +135,9 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
     afe_config->aec_nlp_level = AEC_NLP_LEVEL_VERYAGGR;
     afe_config->ns_init = false;
     afe_config->vad_init = kUseAfeForVoiceProcessing;
-    afe_config->vad_mode = VAD_MODE_0;
+    // VAD_MODE_3：WebRTC VAD 最严格档。realtime 本地打断依赖该 VAD 判定
+    // 用户人声，灵敏度必须压低，避免 AEC 残余回声被误判成说话（自打断）
+    afe_config->vad_mode = VAD_MODE_3;
     afe_config->vad_min_noise_ms = 100;
     if (vad_model_name != nullptr) {
         afe_config->vad_model_name = vad_model_name;
