@@ -276,10 +276,13 @@ void Application::Run() {
                 auto led = Board::GetInstance().GetLed();
                 led->OnStateChanged();
             } else if (GetDeviceState() == kDeviceStateSpeaking &&
-                       listening_mode_ == kListeningModeRealtime) {
+                       listening_mode_ == kListeningModeRealtime &&
+                       audio_service_.IsVoiceDetected()) {
                 // realtime 本地打断兜底（服务端无 barge-in）：AEC 消回声后的
-                // VAD 检出人声即打断。加时间窗防回声误触：AI 开口 800ms 内
-                // 不判（回声最响），打断后 2s 冷却。
+                // VAD 处于人声激活态才打断。事件位只表示"VAD 变了"，不区分
+                // 上升/下降沿，必须以 IsVoiceDetected() 为准，否则回声回落
+                // 的下降沿也会误触发打断。加时间窗防回声误触：AI 开口 800ms
+                // 内不判（回声最响），打断后 2s 冷却。
                 int64_t now_ms = esp_timer_get_time() / 1000;
                 if (now_ms - speaking_start_ms_ > 800 &&
                     now_ms - last_local_interrupt_ms_ > 2000) {
@@ -1058,7 +1061,10 @@ void Application::HandleStateChangedEvent() {
             if (last_error_message_.empty()) {
                 display->SetStatus(IdleStatusText().c_str());
                 display->ClearChatMessages();  // Clear messages first
+#if CONFIG_BOARD_TYPE_OTTO_ROBOT
+                // 帮助卡片文案（按键说明/灵矽环境）为 otto 板专属
                 display->SetChatMessage("system", IdleHelpText().c_str());
+#endif
                 display->SetEmotion(
                     "neutral");  // Then set emotion (wechat mode checks child count)
             }
@@ -1189,7 +1195,9 @@ void Application::HideStartupWakeWordHint() {
     // The hint replaced the persistent idle help card; restore it so the
     // screen does not end up blank after the hint times out.
     if (GetDeviceState() == kDeviceStateIdle && last_error_message_.empty()) {
+#if CONFIG_BOARD_TYPE_OTTO_ROBOT
         Board::GetInstance().GetDisplay()->SetChatMessage("system", IdleHelpText().c_str());
+#endif
     }
 }
 

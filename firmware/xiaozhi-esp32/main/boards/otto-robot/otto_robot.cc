@@ -332,12 +332,20 @@ private:
             ESP_LOGI(TAG, "OTA env -> %s (%s)", kOtaNames[next], kOtaUrls[next]);
             if (display_ != nullptr) {
                 std::string msg = std::string("已切换 ") + kOtaNames[next] + " · 重启生效";
-                display_->SetStatus(msg.c_str());
+                // 按键回调在 esp_timer 任务，LVGL 调用必须切主线程
+                app.Schedule([this, msg = std::move(msg)]() {
+                    display_->SetStatus(msg.c_str());
+                });
             }
-            app.Schedule([]() {
-                vTaskDelay(pdMS_TO_TICKS(2000));
-                esp_restart();
-            });
+            // 2 秒后重启：esp_timer 一次性定时器，不阻塞主事件循环
+            esp_timer_handle_t restart_timer = nullptr;
+            esp_timer_create_args_t timer_args = {.callback = [](void*) { esp_restart(); },
+                                                  .arg = nullptr,
+                                                  .dispatch_method = ESP_TIMER_TASK,
+                                                  .name = "ota_env_restart",
+                                                  .skip_unhandled_events = true};
+            ESP_ERROR_CHECK(esp_timer_create(&timer_args, &restart_timer));
+            esp_timer_start_once(restart_timer, 2000000);
         }, 3);
 
         boot_button_.OnClick([this]() {
