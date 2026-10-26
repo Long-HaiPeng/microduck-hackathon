@@ -2,10 +2,11 @@
 #define OTTO_AUDIO_CODEC_H
 
 #include "codecs/no_audio_codec.h"
-#include "settings.h"
 
 #include <atomic>
 #include <vector>
+
+#include <nvs_flash.h>
 
 // 软件回采参考 mixin：Otto 板无 codec 芯片（INMP441 + I2S 功放直连），
 // 没有硬件回采通道。参考 esp32-s3-box-lite 的做法，把播放数据缓存为
@@ -102,11 +103,23 @@ public:
         : NoAudioCodecDuplex(input_sample_rate, output_sample_rate, bclk, ws, dout, din) {
         input_reference_ = true;
         input_channels_ = 2;  // 麦克风 + 软件参考
-        // NVS 无用户音量记录时默认 30%（低音量降低回声耦合）；
-        // 有记录则保留用户值，不能每次开机覆盖
-        Settings volume_settings("audio", false);
-        if (volume_settings.GetInt("output_volume", -1) < 0) {
-            output_volume_ = 30;
+        // 首次刷入项目固件时一次性播种默认音量 30%（低音量降低回声耦合）。
+        // 原厂固件可能已按同 key 约定写入过音量，仅判断 key 存在与否无法区分
+        // "旧固件遗留值"和"用户选择"，所以用独立 marker 做一次性迁移。
+        // 注意：Settings 的写入路径全是 ESP_ERROR_CHECK，NVS 打不开/写失败会
+        // abort 成重启循环，而播种是可选优化、必须失败可容忍，所以用裸 NVS
+        // API 并忽略所有错误（写不进去就跳过，下次开机重试）。
+        nvs_handle_t volume_handle = 0;
+        if (nvs_open("audio", NVS_READWRITE, &volume_handle) == ESP_OK) {
+            int32_t seeded = 0;
+            nvs_get_i32(volume_handle, "otto_volume_seeded", &seeded);
+            if (seeded == 0) {
+                output_volume_ = 30;
+                nvs_set_i32(volume_handle, "output_volume", 30);
+                nvs_set_i32(volume_handle, "otto_volume_seeded", 1);
+                nvs_commit(volume_handle);
+            }
+            nvs_close(volume_handle);
         }
         InitReference((double)output_sample_rate / input_sample_rate);
     }
@@ -131,11 +144,23 @@ public:
                               mic_sck, mic_ws, mic_din) {
         input_reference_ = true;
         input_channels_ = 2;  // 麦克风 + 软件参考
-        // NVS 无用户音量记录时默认 30%（低音量降低回声耦合）；
-        // 有记录则保留用户值，不能每次开机覆盖
-        Settings volume_settings("audio", false);
-        if (volume_settings.GetInt("output_volume", -1) < 0) {
-            output_volume_ = 30;
+        // 首次刷入项目固件时一次性播种默认音量 30%（低音量降低回声耦合）。
+        // 原厂固件可能已按同 key 约定写入过音量，仅判断 key 存在与否无法区分
+        // "旧固件遗留值"和"用户选择"，所以用独立 marker 做一次性迁移。
+        // 注意：Settings 的写入路径全是 ESP_ERROR_CHECK，NVS 打不开/写失败会
+        // abort 成重启循环，而播种是可选优化、必须失败可容忍，所以用裸 NVS
+        // API 并忽略所有错误（写不进去就跳过，下次开机重试）。
+        nvs_handle_t volume_handle = 0;
+        if (nvs_open("audio", NVS_READWRITE, &volume_handle) == ESP_OK) {
+            int32_t seeded = 0;
+            nvs_get_i32(volume_handle, "otto_volume_seeded", &seeded);
+            if (seeded == 0) {
+                output_volume_ = 30;
+                nvs_set_i32(volume_handle, "output_volume", 30);
+                nvs_set_i32(volume_handle, "otto_volume_seeded", 1);
+                nvs_commit(volume_handle);
+            }
+            nvs_close(volume_handle);
         }
         InitReference((double)output_sample_rate / input_sample_rate);
     }
