@@ -2,18 +2,18 @@
 
 基于六舵机双足玩具和可打印鸭壳的桌面机器人。灵矽负责 ASR、LLM、TTS，设备通过 MCP 工具调用执行本地动作。
 
+**Demo**：[《复刻 Micro Duck（仅实现半成品）并接入灵矽》](https://www.bilibili.com/video/BV1Gznf6VEm2)（B 站，4 分 20 秒）
+
 ## 状态
 
-原型开发中。项目采用“非 1:1、保留关键能力”的缩减范围。本地未提交原型曾构建通过；源码尚未入库，当前仓库不可复核。硬件、真实灵矽链路和 demo 尚未验收。
+上游固件已完整导入并合入 `main`（`v0` 基线），实体设备完成多轮真机烧录，灵矽语音链路真机已打通。当前工作：舵机槽位硬件修复。
 
 | 项目 | 状态 |
 | --- | --- |
-| 硬件 | 已选定六舵机成品玩具＋FlashDuck 壳；准备采购，到货后核对烧录与接口兼容性 |
-| 固件 | 本地原型已接入断网停止和 30 秒 watchdog，编译通过；源码未入库，真机未验证 |
-| 灵矽 OTA/WSS/MCP | 待真机验证 |
-| 全双工与语音打断 | 已配置灵矽 `realtime` 和服务器 AEC；待真机验证回声与响应时延 |
-| 前进/后退/转向/停止 | 待真机验证 |
-| Demo 视频 | 未录制；比赛规则要求提交视频 |
+| 硬件 | ESP32-S3、屏幕、电池、充电均正常；舵机槽位/排针修复中 |
+| 固件 | 灵矽接入、动作安全、断网停步、30 秒 watchdog、三种对话模式、设备端 AEC 已实现 |
+| 构建与测试 | ESP-IDF 6.1 构建通过，主机测试 130 通过；见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)「实现状态」 |
+| 语音链路 | 灵矽 OTA/WSS/MCP 真机已通，OTA 双环境切换已实现 |
 
 ## 首版功能
 
@@ -25,7 +25,7 @@
 
 ## 目标硬件配置
 
-当前使用现有的六舵机成品玩具，并为它加装 FlashDuck 鸭形外壳。Otto/闪猫侠套件作为备选。到货后必须核对控制板引脚、音频、屏幕和固件烧录方式，兼容性未确认前不刷舵机固件。
+基于自行组装的六舵机双足玩具（Otto 结构），加装 3D 打印鸭形外壳。Otto/闪猫侠套件作为备选。设备已核对：可进入烧录模式（按住 BOOT 上电）、屏幕与音频正常、原厂链路可接灵矽。
 
 ```text
 ESP32-S3-WROOM N16R8
@@ -36,7 +36,7 @@ ESP32-S3-WROOM N16R8
    └─ 电池、开关、USB-C
 ```
 
-目标总价控制在 ¥800 内；超过这个金额就改用 ¥299–600 的 Otto 套件。详细清单见 [hardware/BOM.md](hardware/BOM.md)，装配与校准见 [hardware/ASSEMBLY.md](hardware/ASSEMBLY.md)。
+本台实际支出约 ¥270（玩具＋打印＋运费）。详细清单见 [hardware/BOM.md](hardware/BOM.md)，装配与校准见 [hardware/ASSEMBLY.md](hardware/ASSEMBLY.md)。
 
 ## 运行链路
 
@@ -50,33 +50,34 @@ ESP32-S3 → 本地动作校验 → Otto 步态 → 舵机
 ## 仓库结构
 
 ```text
-├── firmware/   # ESP32 固件，完整上游源码导入后使用
+├── firmware/   # ESP32 固件（上游源码已导入，`v0` 基线）
 ├── hardware/   # BOM、装配和校准
-└── docs/       # 产品、调研、架构、验证与仓库规则
+└── docs/       # 产品、调研与架构
 ```
 
 ## 构建与烧录
 
-固件基线导入后，从 `firmware/xiaozhi-esp32/` 构建：
+源码已入库。激活 ESP-IDF 6.1 后，从 `firmware/xiaozhi-esp32/` 构建：
 
 ```bash
-idf.py set-target esp32s3
-idf.py menuconfig   # Board: Otto Robot
-idf.py build
+cd firmware/xiaozhi-esp32
+python scripts/build.py otto-robot --name otto-robot
 idf.py -p /dev/cu.usbmodemXXXX flash monitor
 ```
+
+`scripts/build.py` 生成 `build/merged-binary.bin`。已复核的 commit、工具链和产物摘要见[系统架构](docs/ARCHITECTURE.md)「实现状态」。
 
 要求 ESP-IDF 6.1、ESP32-S3 N16R8 和支持数据传输的 USB-C。首次烧录时可能需要按住 BOOT 再上电。灵矽 OTA 默认为 `https://xrobo.qiniuapi.com/v1/ota/`。
 
 ## 文档
 
-- [产品定义与用户研究](docs/PRODUCT.md)：项目范围、用户画像和市场判断
+- [产品定义与用户研究](docs/PRODUCT.md)：项目范围、目标用户和市场判断
+- [商业价值与商业化路径](docs/BUSINESS.md)：竞品价格、成本结构与商业化计划
 - [技术选型与接入依据](docs/RESEARCH.md)：平台选择、灵矽协议和许可证边界
-- [系统架构](docs/ARCHITECTURE.md)：运行拓扑、模块规格、分工和安全设计
-- [验收记录](docs/VALIDATION.md)：实际证据、测试矩阵和 Demo 提交要求
+- [系统架构](docs/ARCHITECTURE.md)：运行拓扑、模块划分、安全设计与实现状态
 - [固件导入说明](firmware/README.md)：上游基线和 `v0` 流程
 - [硬件 BOM](hardware/BOM.md)：路线、价格、采购和到货检查
-- [装配与校准](hardware/ASSEMBLY.md)：成品玩具和 Otto 套件的装配流程
+- [装配与校准](hardware/ASSEMBLY.md)：玩具组装和 Otto 套件的装配流程
 - [开发与提交规范](CONTRIBUTING.md)：commit、工作树、PR、验证和敏感信息约束
 
 ## 适用范围
