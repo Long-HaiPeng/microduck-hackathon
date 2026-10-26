@@ -58,6 +58,8 @@ public:
     virtual void SetupUI() { setup_ui_called_ = true; }
     virtual bool IsMonochrome() const { return false; }
     virtual bool SupportsGuiOperations() const { return false; }
+    // 板级可关：帮助卡片已常驻唤醒词的显示不需要再弹启动提示
+    virtual bool WantsStartupWakeWordHint() const { return true; }
     virtual void SetHideSubtitle(bool hide) { (void)hide; }
     virtual bool InsertAnimDialog(const char* name, uint32_t duration_ms) {
         (void)name;

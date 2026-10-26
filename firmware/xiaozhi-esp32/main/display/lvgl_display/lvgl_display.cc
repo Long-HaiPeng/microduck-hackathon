@@ -213,7 +213,9 @@ void LvglDisplay::UpdateStatusBar(bool update_all) {
         }
     }
 
-    // Update time — show HH:MM when idle; refresh immediately on state
+    // Update idle status — clock merged with listening mode ("HH:MM · realtime",
+    // produced by Application::IdleStatusText) so the per-minute refresh no
+    // longer wipes the mode indicator; refresh immediately on state
     // transitions (update_all=true) and on every minute change thereafter.
     if (app.GetDeviceState() == kDeviceStateIdle) {
         time_t now = time(NULL);
@@ -222,9 +224,7 @@ void LvglDisplay::UpdateStatusBar(bool update_all) {
             int cur_min = tm_now->tm_hour * 60 + tm_now->tm_min;
             if (update_all || cur_min != last_displayed_clock_min_) {
                 last_displayed_clock_min_ = cur_min;
-                char time_str[16];
-                strftime(time_str, sizeof(time_str), "%H:%M", tm_now);
-                SetStatus(time_str);
+                SetStatus(app.IdleStatusText().c_str());
             }
         } else {
             ESP_LOGW(TAG, "System time not set (tm_year=%d)", tm_now->tm_year);
