@@ -102,6 +102,9 @@ void OttoEmojiDisplay::SetStatus(const char* status) {
 
     lv_obj_set_style_text_font(status_label_, text_font, 0);
     lv_label_set_text(status_label_, status);
+    // 从图标模式（LISTENING/SPEAKING/CONNECTING）切回文本时恢复状态栏图标
+    lv_obj_clear_flag(network_label_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(battery_label_, LV_OBJ_FLAG_HIDDEN);
 }
 
 void OttoEmojiDisplay::SetPreviewImage(std::unique_ptr<LvglImage> image) {

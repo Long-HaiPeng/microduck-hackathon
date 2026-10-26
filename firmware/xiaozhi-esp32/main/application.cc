@@ -11,6 +11,7 @@
 #include "system_info.h"
 #include "text_glyph_payload.h"
 #include "websocket_protocol.h"
+#include "weather_service.h"
 
 #include <driver/gpio.h>
 #include <esp_log.h>
@@ -138,6 +139,9 @@ void Application::Initialize() {
                 msg += data;
                 display->ShowNotification(msg.c_str(), 30000);
                 xEventGroupSetBits(event_group_, MAIN_EVENT_NETWORK_CONNECTED);
+#if CONFIG_BOARD_TYPE_OTTO_ROBOT
+                WeatherService::GetInstance().Start();
+#endif
                 break;
             }
             case NetworkEvent::Disconnected:
@@ -170,6 +174,13 @@ void Application::Initialize() {
                 break;
         }
     });
+
+#if CONFIG_BOARD_TYPE_OTTO_ROBOT
+    // 天气数据到达时在主线程刷新待机帮助卡片
+    WeatherService::GetInstance().SetOnUpdated([this]() {
+        Schedule([this]() { RefreshIdleHelp(); });
+    });
+#endif
 
     // Start network asynchronously
     board.StartNetwork();
@@ -264,6 +275,21 @@ void Application::Run() {
             if (GetDeviceState() == kDeviceStateListening) {
                 auto led = Board::GetInstance().GetLed();
                 led->OnStateChanged();
+            } else if (GetDeviceState() == kDeviceStateSpeaking &&
+                       listening_mode_ == kListeningModeRealtime &&
+                       audio_service_.IsVoiceDetected()) {
+                // realtime 本地打断兜底（服务端无 barge-in）：AEC 消回声后的
+                // VAD 处于人声激活态才打断。事件位只表示"VAD 变了"，不区分
+                // 上升/下降沿，必须以 IsVoiceDetected() 为准，否则回声回落
+                // 的下降沿也会误触发打断。加时间窗防回声误触：AI 开口 800ms
+                // 内不判（回声最响），打断后 2s 冷却。
+                int64_t now_ms = esp_timer_get_time() / 1000;
+                if (now_ms - speaking_start_ms_ > 800 &&
+                    now_ms - last_local_interrupt_ms_ > 2000) {
+                    last_local_interrupt_ms_ = now_ms;
+                    ESP_LOGI(TAG, "Local realtime interrupt (VAD)");
+                    AbortSpeaking(kAbortReasonWakeWordDetected);
+                }
             }
         }
 
@@ -826,7 +852,7 @@ void Application::HandleToggleChatEvent() {
     }
 
     if (state == kDeviceStateIdle) {
-        ListeningMode mode = GetDefaultListeningMode();
+        ListeningMode mode = ResolveStartListeningMode();
         if (!protocol_->IsAudioChannelOpened()) {
             SetDeviceState(kDeviceStateConnecting);
             // Schedule to let the state change be processed first (UI update)
@@ -937,7 +963,7 @@ void Application::HandleWakeWordDetectedEvent() {
             ;
 
         if (state == kDeviceStateListening) {
-            protocol_->SendStartListening(GetDefaultListeningMode());
+            protocol_->SendStartListening(ResolveStartListeningMode());
             audio_service_.ResetDecoder();
             audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
             // Re-enable wake word detection as it was stopped by the detection itself
@@ -945,7 +971,7 @@ void Application::HandleWakeWordDetectedEvent() {
         } else {
             // Play popup sound and start listening again
             play_popup_on_listening_ = true;
-            SetListeningMode(GetDefaultListeningMode());
+            SetListeningMode(ResolveStartListeningMode());
         }
     } else if (state == kDeviceStateActivating) {
         // Restart the activation check if the wake word is detected during activation
@@ -1005,12 +1031,12 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
     }
     // Set the chat state to wake word detected
     protocol_->SendWakeWordDetected(wake_word);
-    SetListeningMode(GetDefaultListeningMode());
+    SetListeningMode(ResolveStartListeningMode());
 #else
     // Set flag to play popup sound after state changes to listening
     // (PlaySound here would be cleared by ResetDecoder in EnableVoiceProcessing)
     play_popup_on_listening_ = true;
-    SetListeningMode(GetDefaultListeningMode());
+    SetListeningMode(ResolveStartListeningMode());
 #endif
 }
 
@@ -1033,8 +1059,12 @@ void Application::HandleStateChangedEvent() {
             // queues STATE_CHANGED after Alert(), and the idle handler would
             // otherwise wipe the status, emotion, and chat message.
             if (last_error_message_.empty()) {
-                display->SetStatus(Lang::Strings::STANDBY);
+                display->SetStatus(IdleStatusText().c_str());
                 display->ClearChatMessages();  // Clear messages first
+#if CONFIG_BOARD_TYPE_OTTO_ROBOT
+                // 帮助卡片文案（按键说明/灵矽环境）为 otto 板专属
+                display->SetChatMessage("system", IdleHelpText().c_str());
+#endif
                 display->SetEmotion(
                     "neutral");  // Then set emotion (wechat mode checks child count)
             }
@@ -1067,6 +1097,8 @@ void Application::HandleStateChangedEvent() {
             break;
         case kDeviceStateSpeaking:
             display->SetStatus(Lang::Strings::SPEAKING);
+            // 记录 AI 开口时刻，供 realtime 本地打断的防回声时间窗使用
+            speaking_start_ms_ = esp_timer_get_time() / 1000;
 
             if (listening_mode_ != kListeningModeRealtime) {
                 audio_service_.EnableVoiceProcessing(false);
@@ -1098,6 +1130,10 @@ void Application::ShowStartupWakeWordHint() {
         return;
     }
     pending_startup_wake_word_hint_ = false;
+    // 板级可关：帮助卡片已常驻唤醒词说明的显示跳过启动提示
+    if (!Board::GetInstance().GetDisplay()->WantsStartupWakeWordHint()) {
+        return;
+    }
     const auto state = GetDeviceState();
     const bool wake_word_running = audio_service_.IsWakeWordRunning();
     if (state != kDeviceStateIdle || !last_error_message_.empty() || !wake_word_running) {
@@ -1156,6 +1192,13 @@ void Application::HideStartupWakeWordHint() {
     Board::GetInstance().GetDisplay()->RemoveChatMessage("assistant",
                                                          startup_wake_word_hint_message_.c_str());
     startup_wake_word_hint_message_.clear();
+    // The hint replaced the persistent idle help card; restore it so the
+    // screen does not end up blank after the hint times out.
+    if (GetDeviceState() == kDeviceStateIdle && last_error_message_.empty()) {
+#if CONFIG_BOARD_TYPE_OTTO_ROBOT
+        Board::GetInstance().GetDisplay()->SetChatMessage("system", IdleHelpText().c_str());
+#endif
+    }
 }
 
 void Application::StartListeningAudio() {
@@ -1287,11 +1330,76 @@ void Application::SwitchListeningMode(ListeningMode mode) {
         if (protocol_ && protocol_->IsAudioChannelOpened()) {
             protocol_->SendListenMode(listening_mode_);
         }
+        // Refresh the idle status bar so the shown mode stays in sync.
+        if (state_machine_.GetState() == kDeviceStateIdle &&
+            last_error_message_.empty()) {
+            Board::GetInstance().GetDisplay()->SetStatus(IdleStatusText().c_str());
+        }
     });
+}
+
+std::string Application::IdleStatusText() const {
+    const char* mode = "realtime";
+    if (listening_mode_ == kListeningModeAutoStop) {
+        mode = "auto";
+    } else if (listening_mode_ == kListeningModeManualStop) {
+        mode = "manual";
+    }
+    // 时钟已对齐时并入状态栏，显示层的分钟刷新与本文本格式一致，
+    // 避免时钟每分钟把模式显示覆盖成纯时间
+    time_t now = time(NULL);
+    struct tm* tm_now = localtime(&now);
+    if (tm_now != nullptr && tm_now->tm_year >= 2025 - 1900) {
+        char time_str[16];
+        strftime(time_str, sizeof(time_str), "%H:%M", tm_now);
+        return std::string(time_str) + " · " + mode;
+    }
+    return std::string(Lang::Strings::STANDBY) + " · " + mode;
+}
+
+std::string Application::IdleHelpText() const {
+    // 显示当前灵矽环境（NVS ota_url 为空时默认正式环境）
+    Settings settings("wifi", false);
+    std::string url = settings.GetString("ota_url");
+    const char* env =
+        (url.find("xrobo-k8") != std::string::npos) ? "灵矽测试" : "灵矽正式";
+
+    // 天气表盘：有数据时置于卡片首行
+    std::string text;
+    auto weather = WeatherService::GetInstance().GetSummary();
+    if (!weather.empty()) {
+        text = weather + "\n";
+    }
+
+#if CONFIG_LANGUAGE_ZH_CN
+    text +=
+        "你好小智唤醒 · 单击=对话\n长按说话 双击模式 三击服务器\n试试说: 走两步 / 挥挥手";
+#else
+    text += "Hi,xiaozhi wake · Click=Chat\nHold=Talk Dbl=Mode 3x=Server\nTry: walk / wave";
+#endif
+#if CONFIG_LANGUAGE_ZH_CN
+    text += std::string("\n服务器: ") + env;
+#else
+    text += (url.find("xrobo-k8") != std::string::npos) ? "\nServer: LingXi Test"
+                                                        : "\nServer: LingXi Pro";
+#endif
+    return text;
+}
+
+void Application::RefreshIdleHelp() {
+    // 天气任务线程经 Schedule 切回主线程后调用；仅待机且无错误时覆盖卡片
+    if (GetDeviceState() == kDeviceStateIdle && last_error_message_.empty()) {
+        Board::GetInstance().GetDisplay()->SetChatMessage("system", IdleHelpText().c_str());
+    }
 }
 
 ListeningMode Application::GetDefaultListeningMode() const {
     return aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime;
+}
+
+ListeningMode Application::ResolveStartListeningMode() const {
+    // 板子（如 otto）允许用户双击选模式时，开聊沿用所选模式而不是强制默认
+    return use_selected_listening_mode_ ? listening_mode_ : GetDefaultListeningMode();
 }
 
 void Application::Reboot() {

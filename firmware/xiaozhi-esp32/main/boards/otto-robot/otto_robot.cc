@@ -6,6 +6,7 @@
 #include <esp_lcd_panel_vendor.h>
 #include <esp_log.h>
 #include <esp_rom_sys.h>
+#include <esp_system.h>
 #include <esp_timer.h>
 
 #include <new>
@@ -20,7 +21,9 @@
 #include "led/single_led.h"
 #include "mcp_server.h"
 #include "otto_emoji_display.h"
+#include "otto_audio_codec.h"
 #include "power_manager.h"
+#include "settings.h"
 #include "system_reset.h"
 #include "websocket_control_server.h"
 #include "wifi_board.h"
@@ -47,8 +50,8 @@ private:
     // 长按对讲（PTT）：按下后短于该时长视为单击，达到该时长进入对讲
     esp_timer_handle_t ptt_timer_ = nullptr;
     bool ptt_active_ = false;
-    // 用户双击选择的拾音模式（PTT 借用 manual 语义后据此恢复）
-    ListeningMode persistent_mode_ = kListeningModeAutoStop;
+    // 用户双击选择的拾音模式（PTT 借用 manual 语义后据此恢复；单击对话开始前也会应用）
+    ListeningMode persistent_mode_ = kListeningModeRealtime;
 
     bool DetectHardwareVersion() {
         constexpr gpio_num_t kDetectGpio15 = GPIO_NUM_15;
@@ -306,14 +309,44 @@ private:
                 (mode == kListeningModeRealtime) ? "Realtime"
                 : (mode == kListeningModeAutoStop) ? "Auto" : "Manual";
             ESP_LOGI(TAG, "Listen mode -> %s", mode_name);
+            // 状态栏文本由 SwitchListeningMode 统一刷新（IdleStatusText），不再单独覆盖
+        });
+
+        boot_button_.OnMultipleClick([this]() {
+            auto& app = Application::GetInstance();
+            // 仅空闲态响应，避免对话/动作中误触重启
+            if (app.GetDeviceState() != kDeviceStateIdle || ptt_active_) {
+                return;
+            }
+            // 三击循环切换灵矽环境：正式 <-> 测试（持久化到 NVS，重启生效）
+            static const char* kOtaUrls[] = {
+                "https://xrobo.qiniuapi.com/v1/ota/",   // 灵矽正式
+                "http://xrobo-k8.qiniu.io/xiaozhi/ota/" // 灵矽测试
+            };
+            static const char* kOtaNames[] = {"灵矽正式", "灵矽测试"};
+            Settings settings("wifi", true);
+            std::string cur = settings.GetString("ota_url");
+            int cur_idx = (cur.find("xrobo-k8") != std::string::npos) ? 1 : 0;
+            int next = 1 - cur_idx;
+            settings.SetString("ota_url", kOtaUrls[next]);
+            ESP_LOGI(TAG, "OTA env -> %s (%s)", kOtaNames[next], kOtaUrls[next]);
             if (display_ != nullptr) {
-                Application::GetInstance().Schedule([this, mode_name]() {
-                    if (display_ != nullptr) {
-                        display_->SetStatus(mode_name);
-                    }
+                std::string msg = std::string("已切换 ") + kOtaNames[next] + " · 重启生效";
+                // 按键回调在 esp_timer 任务，LVGL 调用必须切主线程
+                app.Schedule([this, msg = std::move(msg)]() {
+                    display_->SetStatus(msg.c_str());
                 });
             }
-        });
+            // 2 秒后重启：esp_timer 一次性定时器，不阻塞主事件循环
+            esp_timer_handle_t restart_timer = nullptr;
+            esp_timer_create_args_t timer_args = {.callback = [](void*) { esp_restart(); },
+                                                  .arg = nullptr,
+                                                  .dispatch_method = ESP_TIMER_TASK,
+                                                  .name = "ota_env_restart",
+                                                  .skip_unhandled_events = true};
+            ESP_ERROR_CHECK(esp_timer_create(&timer_args, &restart_timer));
+            esp_timer_start_once(restart_timer, 2000000);
+        }, 3);
 
         boot_button_.OnClick([this]() {
             auto& app = Application::GetInstance();
@@ -328,6 +361,9 @@ private:
             if (ptt_active_) {
                 return;  // 长按松开后附加的单击事件，忽略
             }
+            // 单击开启对话前先恢复双击选择的拾音模式：
+            // 上游在对话开始时会把模式重置为默认，这里保住用户的选择
+            app.SwitchListeningMode(persistent_mode_);
             app.ToggleChatState();
         });
     }
@@ -428,13 +464,13 @@ private:
 
     void InitializeAudioCodec() {
         if (hw_config_.audio_use_simplex) {
-            audio_codec_ = new NoAudioCodecSimplex(
+            audio_codec_ = new OttoAudioCodecSimplex(
                 hw_config_.audio_input_sample_rate, hw_config_.audio_output_sample_rate,
                 hw_config_.audio_i2s_spk_gpio_bclk, hw_config_.audio_i2s_spk_gpio_lrck,
                 hw_config_.audio_i2s_spk_gpio_dout, hw_config_.audio_i2s_mic_gpio_sck,
                 hw_config_.audio_i2s_mic_gpio_ws, hw_config_.audio_i2s_mic_gpio_din);
         } else {
-            audio_codec_ = new NoAudioCodecDuplex(
+            audio_codec_ = new OttoAudioCodecDuplex(
                 hw_config_.audio_input_sample_rate, hw_config_.audio_output_sample_rate,
                 hw_config_.audio_i2s_gpio_bclk, hw_config_.audio_i2s_gpio_ws,
                 hw_config_.audio_i2s_gpio_dout, hw_config_.audio_i2s_gpio_din);
@@ -482,6 +518,8 @@ public:
         InitializeButtons();
         InitializePowerManager();
         InitializeAudioCodec();
+        // 对话开始/唤醒沿用双击所选拾音模式，不重置为默认模式
+        Application::GetInstance().SetUseSelectedListeningMode(true);
 
         if (has_camera_) {
             if (!InitializeCamera()) {

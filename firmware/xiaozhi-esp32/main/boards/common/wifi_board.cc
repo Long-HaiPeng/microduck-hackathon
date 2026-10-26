@@ -59,6 +59,15 @@ void WifiBoard::StartNetwork() {
     config.show_ota_config = true;
     config.show_sleep_config = true;
 
+    // 配网页高级设置的 OTA 栏读 NVS ota_url；未写入过（即一直用默认环境）时
+    // 落盘 CONFIG_OTA_URL，保证进去总能显示当前环境而不是空的
+    {
+        Settings settings("wifi", true);
+        if (settings.GetString("ota_url").empty()) {
+            settings.SetString("ota_url", CONFIG_OTA_URL);
+        }
+    }
+
     // Set a DHCP hostname so the router shows a friendly name instead of "espressif".
     // Uses the same "<prefix>-<last 2 MAC bytes>" scheme as the config AP SSID.
     uint8_t mac[6];

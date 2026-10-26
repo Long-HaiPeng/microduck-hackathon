@@ -17,6 +17,8 @@ class OttoEmojiDisplay : public SpiLcdDisplay {
     virtual void SetStatus(const char* status) override;
     virtual void SetPreviewImage(std::unique_ptr<LvglImage> image) override;
     virtual void SetupUI() override;
+    // 空闲帮助卡片已常驻唤醒词说明，不再弹启动提示
+    virtual bool WantsStartupWakeWordHint() const override { return false; }
 
    private:
     void InitializeOttoEmojis();
