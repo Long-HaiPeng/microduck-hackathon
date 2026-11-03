@@ -10,8 +10,8 @@
 
 // 软件回采参考 mixin：Otto 板无 codec 芯片（INMP441 + I2S 功放直连），
 // 没有硬件回采通道。参考 esp32-s3-box-lite 的做法，把播放数据缓存为
-// AEC 参考流，使 CONFIG_USE_DEVICE_AEC 的 AFE 回声消除真正生效，
-// realtime 全双工模式不再被自己的 TTS 打断。
+// AEC 参考流，供 CONFIG_USE_DEVICE_AEC 的 AFE 估计并抑制自身播放回声。
+// 这只是提供算法输入；延迟对齐和真机回声抑制效果尚未验收，不能保证无自打断。
 //
 // 播放率与拾音率不同时（无摄像头版 24k 播放 / 16k 拾音），写入侧先做
 // 线性插值降采样，保证参考流与麦克风同采样率。
@@ -22,8 +22,9 @@ public:
         // 循环延迟（折算成拾音率样本数）：Write 入队的数据经 TX DMA 队列
         // （6x240 帧 @播放率）才出声，回声又经 RX DMA 队列（6x240 帧 @拾音率）
         // 才被读走。参考流在 Write 时即入缓冲、Read 时即被消费，若不垫入
-        // 等长静音，会领先麦克风听到的回声约 180ms，AEC 无法对齐收敛，
-        // 残余回声被 VAD 误判为用户说话（自打断）。
+        // 等长静音，参考流可能领先麦克风听到的回声。下式按 DMA 容量估算
+        // 延迟（16k/16k 时约 180ms），并非实测值；对齐不足可能导致残余
+        // 回声被 VAD 误判为用户说话（自打断）。
         constexpr int kDmaFrames = AUDIO_CODEC_DMA_DESC_NUM * AUDIO_CODEC_DMA_FRAME_NUM;
         playout_delay_samples_ =
             (int64_t)kDmaFrames + (int64_t)(kDmaFrames / rate_step);
@@ -31,8 +32,11 @@ public:
     }
 
     void PushReference(const int16_t* data, int samples) {
+        if (samples == 0) {
+            return;
+        }
         // 新一轮播放开始（缓冲已排空）时，先垫入出声延迟等长的静音，
-        // 使参考流与麦克风回声时间对齐（见 InitReference 注释）
+        // 尝试补偿参考流与麦克风回声的时间差，实际对齐仍需测量。
         size_t wp0 = ref_write_pos_.load(std::memory_order_relaxed);
         size_t rp0 = ref_read_pos_.load(std::memory_order_relaxed);
         if (wp0 == rp0 && playout_delay_samples_ > 0) {
@@ -47,12 +51,14 @@ public:
             return;
         }
         // 播放率 > 拾音率（如 24k -> 16k）：按全局输入轴做线性插值降采样
-        double base = in_count_ - samples;
-        while (next_in_pos_ <= in_count_ - 1.0) {
-            int idx = (int)(next_in_pos_ - base);
-            double frac = next_in_pos_ - base - idx;
+        // 需要下一帧首样本的插值留到下一次调用，使用 prev_last_ 衔接。
+        while (next_in_pos_ <= in_count_ + samples - 1) {
+            int64_t lower = (int64_t)next_in_pos_;
+            int idx = (int)(lower - in_count_);
+            double frac = next_in_pos_ - lower;
             int16_t a = (idx < 0) ? prev_last_ : data[idx];
-            int16_t b = data[idx + 1];
+            // 整数采样点（包括当前帧末尾）无需读取下一个样本。
+            int16_t b = (frac == 0.0) ? a : data[idx + 1];
             PushRaw((int16_t)(a + (int32_t)((b - a) * frac)));
             next_in_pos_ += step_;
         }
@@ -74,10 +80,11 @@ public:
 private:
     void PushRaw(int16_t v) {
         size_t wp = ref_write_pos_.load(std::memory_order_relaxed);
-        size_t rp = ref_read_pos_.load(std::memory_order_relaxed);
+        size_t rp = ref_read_pos_.load(std::memory_order_acquire);
         if (wp - rp >= kRefBufferSize) {
-            // 写溢出：丢弃最旧的参考数据，保留最新波形
-            ref_read_pos_.store(wp - kRefBufferSize + 1, std::memory_order_release);
+            // 写溢出：丢弃新样本，不覆盖消费者可能正在读取的槽位。
+            // 溢出后的声学对齐已不可信，不能靠覆盖旧数据恢复。
+            return;
         }
         ref_buffer_[wp & (kRefBufferSize - 1)] = v;
         ref_write_pos_.store(wp + 1, std::memory_order_release);

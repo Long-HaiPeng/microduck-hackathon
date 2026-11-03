@@ -4,8 +4,8 @@
 #include <cstdint>
 #include <vector>
 
-// Write：音量缩放后写 I2S，同时把缩放后的实际出声波形缓存为 AEC 参考
-// （Read 侧从缓冲头部消费，天然滞后于播放，与真实声路径方向一致）。
+// Write：音量缩放后写 I2S，同时把数字播放波形缓存为 AEC 参考。
+// 参考不包含功放、喇叭和声学路径的变化；缓冲延迟需通过真机测量验证。
 template <typename Codec>
 static int OttoWrite(Codec* codec, const int16_t* data, int samples) {
     std::lock_guard<std::mutex> lock(codec->data_if_mutex_);
