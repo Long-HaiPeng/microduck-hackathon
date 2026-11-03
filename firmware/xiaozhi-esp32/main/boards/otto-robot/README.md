@@ -7,6 +7,13 @@
 
 ## 简介
 
+本项目新增 `otto-duck` 构建变体：左手通道改嘴巴、右手通道改脖子，
+开放受限鸭形动作，采用小窗口单眼显示。`self.flashduck.*` 与既有的
+`self.otto.*` 鸭形工具指向同一控制器，支持视频中使用的 `head_shake`、
+`dance`、`sit`、`home`；这些动作的自有固件实现仍待真机验收。装配和参数说明见
+[装配与校准](../../../../../hardware/ASSEMBLY.md)。
+本页后续内容为上游 Otto 说明，动作列表和后台角色提示不适用于鸭形变体。
+
 otto 机器人是一个开源的人形机器人平台，具有多种动作能力和互动功能。本项目基于 ESP32 实现了 otto 机器人的控制系统，并加入小智ai。
 
 - <a href="www.ottodiy.tech" target="_blank" title="otto官网">复刻教程</a>

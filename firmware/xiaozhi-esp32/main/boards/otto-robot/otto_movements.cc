@@ -95,18 +95,34 @@ void Otto::SetTrims(int left_leg, int right_leg, int left_foot, int right_foot, 
 ///////////////////////////////////////////////////////////////////
 //-- BASIC MOTION FUNCTIONS -------------------------------------//
 ///////////////////////////////////////////////////////////////////
+bool Otto::WaitForMotion(TickType_t ticks) {
+    if (ticks == 0 && !IsStopRequested()) {
+        vTaskDelay(0);
+    }
+    const TickType_t quantum = std::max<TickType_t>(1, pdMS_TO_TICKS(10));
+    while (ticks > 0 && !IsStopRequested()) {
+        const TickType_t slice = std::min(ticks, quantum);
+        vTaskDelay(slice);
+        ticks -= slice;
+    }
+    return !IsStopRequested();
+}
+
 void Otto::MoveServos(int time, int servo_target[]) {
+    if (IsStopRequested()) {
+        return;
+    }
     if (GetRestState() == true) {
         SetRestState(false);
     }
 
     if (time <= 10) {
-        for (int i = 0; i < SERVO_COUNT; i++) {
+        for (int i = 0; i < SERVO_COUNT && !IsStopRequested(); i++) {
             if (servo_pins_[i] != -1) {
                 servo_[i].SetPosition(servo_target[i]);
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(time));
+        WaitForMotion(pdMS_TO_TICKS(std::max(time, 0)));
         return;
     }
 
@@ -116,20 +132,20 @@ void Otto::MoveServos(int time, int servo_target[]) {
     }
 
     int steps = std::max(1, time / 10);
-    for (int step = 1; step <= steps; step++) {
+    for (int step = 1; step <= steps && !IsStopRequested(); step++) {
         float t = static_cast<float>(step) / static_cast<float>(steps);
         float eased_t = EaseOutCubic(t);
-        for (int i = 0; i < SERVO_COUNT; i++) {
+        for (int i = 0; i < SERVO_COUNT && !IsStopRequested(); i++) {
             if (servo_pins_[i] != -1) {
                 float interpolated =
                     start[i] + (servo_target[i] - start[i]) * eased_t;
                 servo_[i].SetPosition(static_cast<int>(std::round(interpolated)));
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(10));
+        WaitForMotion(pdMS_TO_TICKS(10));
     }
 
-    for (int i = 0; i < SERVO_COUNT; i++) {
+    for (int i = 0; i < SERVO_COUNT && !IsStopRequested(); i++) {
         if (servo_pins_[i] != -1) {
             servo_[i].SetPosition(servo_target[i]);
         }
@@ -137,6 +153,9 @@ void Otto::MoveServos(int time, int servo_target[]) {
 }
 
 void Otto::MoveSingle(int position, int servo_number) {
+    if (IsStopRequested()) {
+        return;
+    }
     if (position > 180)
         position = 90;
     if (position < 0)
@@ -153,6 +172,9 @@ void Otto::MoveSingle(int position, int servo_number) {
 
 void Otto::OscillateServos(int amplitude[SERVO_COUNT], int offset[SERVO_COUNT], int period,
                            double phase_diff[SERVO_COUNT], float cycle = 1) {
+    if (IsStopRequested()) {
+        return;
+    }
     for (int i = 0; i < SERVO_COUNT; i++) {
         if (servo_pins_[i] != -1) {
             servo_[i].SetO(offset[i]);
@@ -165,19 +187,22 @@ void Otto::OscillateServos(int amplitude[SERVO_COUNT], int offset[SERVO_COUNT], 
     double ref = millis();
     double end_time = period * cycle + ref;
 
-    while (millis() < end_time) {
-        for (int i = 0; i < SERVO_COUNT; i++) {
+    while (millis() < end_time && !IsStopRequested()) {
+        for (int i = 0; i < SERVO_COUNT && !IsStopRequested(); i++) {
             if (servo_pins_[i] != -1) {
                 servo_[i].Refresh();
             }
         }
-        vTaskDelay(5);
+        WaitForMotion(5);
     }
-    vTaskDelay(pdMS_TO_TICKS(10));
+    WaitForMotion(pdMS_TO_TICKS(10));
 }
 
 void Otto::Execute(int amplitude[SERVO_COUNT], int offset[SERVO_COUNT], int period,
                    double phase_diff[SERVO_COUNT], float steps = 1.0) {
+    if (IsStopRequested()) {
+        return;
+    }
     if (GetRestState() == true) {
         SetRestState(false);
     }
@@ -186,12 +211,12 @@ void Otto::Execute(int amplitude[SERVO_COUNT], int offset[SERVO_COUNT], int peri
 
     //-- Execute complete cycles
     if (cycles >= 1)
-        for (int i = 0; i < cycles; i++)
+        for (int i = 0; i < cycles && !IsStopRequested(); i++)
             OscillateServos(amplitude, offset, period, phase_diff);
 
     //-- Execute the final not complete cycle
     OscillateServos(amplitude, offset, period, phase_diff, (float)steps - cycles);
-    vTaskDelay(pdMS_TO_TICKS(10));
+    WaitForMotion(pdMS_TO_TICKS(10));
 }
 
 //---------------------------------------------------------
@@ -205,6 +230,9 @@ void Otto::Execute(int amplitude[SERVO_COUNT], int offset[SERVO_COUNT], int peri
 //---------------------------------------------------------
 void Otto::Execute2(int amplitude[SERVO_COUNT], int center_angle[SERVO_COUNT], int period,
                     double phase_diff[SERVO_COUNT], float steps = 1.0) {
+    if (IsStopRequested()) {
+        return;
+    }
     if (GetRestState() == true) {
         SetRestState(false);
     }
@@ -219,18 +247,21 @@ void Otto::Execute2(int amplitude[SERVO_COUNT], int center_angle[SERVO_COUNT], i
 
     //-- Execute complete cycles
     if (cycles >= 1)
-        for (int i = 0; i < cycles; i++)
+        for (int i = 0; i < cycles && !IsStopRequested(); i++)
             OscillateServos(amplitude, offset, period, phase_diff);
 
     //-- Execute the final not complete cycle
     OscillateServos(amplitude, offset, period, phase_diff, (float)steps - cycles);
-    vTaskDelay(pdMS_TO_TICKS(10));
+    WaitForMotion(pdMS_TO_TICKS(10));
 }
 
 ///////////////////////////////////////////////////////////////////
 //-- HOME = Otto at rest position -------------------------------//
 ///////////////////////////////////////////////////////////////////
 void Otto::Home(bool hands_down) {
+    if (IsStopRequested()) {
+        return;
+    }
     if (is_otto_resting_ == false) {  // Go to rest position only if necessary
         // 为所有舵机准备初始位置值
         int homes[SERVO_COUNT];
@@ -261,10 +292,10 @@ void Otto::Home(bool hands_down) {
         // 位移越大，归位时间越长，避免末端“急刹车”感
         int home_time = std::clamp(500 + max_delta * 9, 500, 1700);
         MoveServos(home_time, homes);
-        is_otto_resting_ = true;
+        is_otto_resting_ = !IsStopRequested();
     }
 
-    vTaskDelay(pdMS_TO_TICKS(200));
+    WaitForMotion(pdMS_TO_TICKS(200));
 }
 
 bool Otto::GetRestState() {

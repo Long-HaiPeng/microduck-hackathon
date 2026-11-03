@@ -38,7 +38,9 @@ public:
     void SetO(int offset) { offset_ = offset; };
     void SetPh(double Ph) { phase0_ = Ph; };
     void SetT(unsigned int period);
-    void SetTrim(int trim) { trim_ = trim; };
+    void SetTrim(int trim);
+    // Configure physical limits before attaching the servo.
+    bool SetOutputRange(int min_angle, int max_angle);
     void SetLimiter(int diff_limit) { diff_limit_ = diff_limit; };
     void DisableLimiter() { diff_limit_ = 0; };
     int GetTrim() { return trim_; };
@@ -83,6 +85,10 @@ private:
 
     int diff_limit_;
     long previous_servo_command_millis_;
+    int min_angle_ = 0;
+    int max_angle_ = 180;
+    bool has_output_ = false;
+    bool output_range_configured_ = false;
 
     ledc_channel_t ledc_channel_;
     ledc_mode_t ledc_speed_mode_;

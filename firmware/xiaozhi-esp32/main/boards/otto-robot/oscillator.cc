@@ -119,6 +119,29 @@ void Oscillator::SetPosition(int position) {
     Write(position);
 }
 
+void Oscillator::SetTrim(int trim) {
+    if (output_range_configured_) {
+        trim = std::clamp(trim, -180, 180);
+        // Keep interpolation based on the last physical output when calibration changes.
+        if (has_output_) {
+            pos_ += trim_ - trim;
+        }
+    }
+    trim_ = trim;
+}
+
+bool Oscillator::SetOutputRange(int min_angle, int max_angle) {
+    if (is_attached_ || min_angle < 0 || max_angle > 180 || min_angle > max_angle) {
+        return false;
+    }
+    min_angle_ = min_angle;
+    max_angle_ = max_angle;
+    trim_ = std::clamp(trim_, -180, 180);
+    output_range_configured_ = true;
+    pos_ = std::clamp(pos_ + trim_, min_angle_, max_angle_) - trim_;
+    return true;
+}
+
 void Oscillator::Refresh() {
     if (NextSample()) {
         if (!stop_) {
@@ -136,10 +159,16 @@ void Oscillator::Write(int position) {
     if (!is_attached_)
         return;
 
+    if (output_range_configured_) {
+        // Clamp the target before rate limiting, then clamp the final trimmed output.
+        position = std::clamp(position, min_angle_ - trim_, max_angle_ - trim_);
+    }
     long currentMillis = millis();
     if (diff_limit_ > 0) {
-        int limit = std::max(
-            1, (((int)(currentMillis - previous_servo_command_millis_)) * diff_limit_) / 1000);
+        int limit = static_cast<int>(std::clamp<int64_t>(
+            (static_cast<int64_t>(currentMillis - previous_servo_command_millis_) * diff_limit_) /
+                1000,
+            1, 180));
         if (abs(position - pos_) > limit) {
             pos_ += position < pos_ ? -limit : limit;
         } else {
@@ -152,7 +181,11 @@ void Oscillator::Write(int position) {
 
     int angle = pos_ + trim_;
 
-    angle = std::min(std::max(angle, 0), 180);
+    angle = std::clamp(angle, min_angle_, max_angle_);
+    if (output_range_configured_) {
+        pos_ = angle - trim_;
+    }
+    has_output_ = true;
 
     uint32_t duty = (uint32_t)(((angle / 180.0) * 2.0 + 0.5) * 8191 / 20.0);
 

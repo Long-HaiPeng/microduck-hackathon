@@ -994,6 +994,80 @@ config USE_AUDIO_PROCESSOR
         is not enabled because this project does not provide an NSNet model.
         Requires ESP32-S3, ESP32-P4, or ESP32-S31 with PSRAM.
 
+menu "Otto duck mechanics and display"
+    depends on BOARD_TYPE_OTTO_ROBOT
+
+config OTTO_DUCK_BODY
+    bool "Use duck mechanics (left arm = mouth, right arm = neck)"
+    default n
+    help
+        Select the otto-duck build variant for this option. Retains the
+        selected board's pins and audio path. Calibrate on the actual assembly
+        before operation; these defaults are not hardware acceptance.
+
+if OTTO_DUCK_BODY
+config OTTO_DUCK_MOUTH_CLOSED
+    int "Mouth closed angle"
+    range 0 180
+    default 45
+
+config OTTO_DUCK_MOUTH_OPEN
+    int "Mouth open angle (must exceed closed angle)"
+    range 0 180
+    default 60
+
+config OTTO_DUCK_NECK_MIN
+    int "Neck minimum angle"
+    range 0 180
+    default 105
+
+config OTTO_DUCK_NECK_CENTER
+    int "Neck center angle"
+    range 0 180
+    default 135
+
+config OTTO_DUCK_NECK_MAX
+    int "Neck maximum angle"
+    range 0 180
+    default 165
+
+config OTTO_DUCK_GAIT_HIP_OFFSET
+    int "Duck gait hip inward offset (degrees)"
+    range 0 25
+    default 25
+
+config OTTO_DUCK_GAIT_HIP_AMPLITUDE
+    int "Duck gait hip amplitude (degrees)"
+    range 15 50
+    default 44
+
+config OTTO_DUCK_GAIT_FOOT_AMPLITUDE
+    int "Duck gait foot amplitude (degrees)"
+    range 15 50
+    default 34
+
+config OTTO_DUCK_GAIT_PHASE
+    int "Duck gait foot phase (degrees)"
+    range 60 120
+    default 108
+
+config OTTO_DUCK_EYE_X
+    int "Eye window left edge (pixels)"
+    range 0 176
+    default 72
+
+config OTTO_DUCK_EYE_Y
+    int "Eye window top edge (pixels)"
+    range 0 176
+    default 22
+
+config OTTO_DUCK_EYE_SIZE
+    int "Eye window size (pixels)"
+    range 64 240
+    default 96
+endif
+endmenu
+
 config USE_DEVICE_AEC
     bool "Enable Device-Side AEC"
     default n

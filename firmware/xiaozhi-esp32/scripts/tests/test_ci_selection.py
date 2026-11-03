@@ -66,8 +66,11 @@ class CiSelectionTests(unittest.TestCase):
         for changes in (paths, list(reversed(paths))):
             with self.subTest(changes=changes):
                 selected = build._select_variants_for_changes(self.variants, changes)
-                self.assertEqual(len(selected), 19)
-                self.assertIn("otto-robot", {v["board"] for v in selected})
+                self.assertEqual(len(selected), 20)
+                self.assertEqual(
+                    {v["name"] for v in selected if v["board"] == "otto-robot"},
+                    {"otto-robot", "otto-duck"},
+                )
 
     def test_representative_board_changes_do_not_duplicate_default_build(self):
         selected = build._select_variants_for_changes(

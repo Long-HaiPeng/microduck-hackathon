@@ -1161,6 +1161,11 @@ endif()
 if(NOT BOARD_NAME)
     set(BOARD_NAME ${BOARD_TYPE})
 endif()
+if(CONFIG_OTTO_DUCK_BODY AND NOT BOARD_NAME STREQUAL "otto-duck")
+    message(FATAL_ERROR
+        "Duck mechanics must use the otto-duck variant so OTA reports a distinct board name"
+    )
+endif()
 if(NOT CMAKE_BUILD_EARLY_EXPANSION AND NOT BOARD_NAME MATCHES "^[a-z0-9.-]+$")
     message(FATAL_ERROR
         "Invalid BOARD_NAME '${BOARD_NAME}': only lowercase letters, digits, '.' and '-' are allowed"

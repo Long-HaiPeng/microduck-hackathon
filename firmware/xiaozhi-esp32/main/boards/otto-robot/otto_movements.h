@@ -1,6 +1,8 @@
 #ifndef __OTTO_MOVEMENTS_H__
 #define __OTTO_MOVEMENTS_H__
 
+#include <atomic>
+
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -96,6 +98,10 @@ public:
     void EnableServoLimit(int speed_limit_degree_per_sec = SERVO_LIMIT_DEFAULT);
     void DisableServoLimit();
 
+    void RequestStop() { stop_requested_.store(true); }
+    void ClearStopRequest() { stop_requested_.store(false); }
+    bool IsStopRequested() const { return stop_requested_.load(); }
+
 private:
     Oscillator servo_[SERVO_COUNT];
 
@@ -108,6 +114,9 @@ private:
 
     bool is_otto_resting_;
     bool has_hands_;  // 是否有手部舵机
+    std::atomic<bool> stop_requested_{false};
+
+    bool WaitForMotion(TickType_t ticks);
 
     void Execute(int amplitude[SERVO_COUNT], int offset[SERVO_COUNT], int period,
                  double phase_diff[SERVO_COUNT], float steps);
