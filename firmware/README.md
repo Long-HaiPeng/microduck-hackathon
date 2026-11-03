@@ -55,9 +55,7 @@ python3 -m unittest discover -s scripts/tests -v
 | 对象 | 固件来源 | 验证范围 |
 | --- | --- | --- |
 | [约 47 秒实物 Demo](../docs/media/demo.mp4) | FlashDuck 官方固件，接入灵矽 | 视频中的摇头、跳舞、坐下和归位 |
-| 本仓库 `otto-duck` | 在含 Otto 支持的小智固件上二次开发 | 构建与主机测试；整机联调持续进行 |
-
-视频记录实拍版本的动作效果，不能作为本仓库鸭形固件的真机验收结果。
+| 本仓库 `otto-duck` | 在含 Otto 支持的小智固件上二次开发 | 构建与主机测试 |
 
 ## 代码入口
 
