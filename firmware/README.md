@@ -32,7 +32,7 @@ python3 scripts/build.py otto-robot --name otto-duck --language zh-CN
 
 ## 烧录与验收
 
-烧录前按[装配与校准](../hardware/ASSEMBLY.md)确认板型、引脚、供电、关节方向和行程。固件内置自动板型检测，但检测结果仍需与实际主板及启动日志核对；未插摄像头不等于无摄像头版主板。
+烧录前按[板卡与接线核对](../hardware/ASSEMBLY.md#板卡与接线核对)确认板型、引脚和供电；烧录后按装配说明逐项校准关节方向与行程。
 
 确认配置后，在固件目录使用 ESP-IDF 烧录命令：
 

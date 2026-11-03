@@ -31,7 +31,7 @@ ESP32-S3：采音、音频处理、Opus 编码
 | 显示 | 在原屏幕显示上增加状态和小窗口单眼布局 | [otto_emoji_display.cc](../firmware/xiaozhi-esp32/main/boards/otto-robot/otto_emoji_display.cc) |
 | 板型与构建 | 选择板卡引脚；同一板级目录提供 `otto-robot`、`otto-duck` 两个构建变体 | [config.h](../firmware/xiaozhi-esp32/main/boards/otto-robot/config.h)、[config.json](../firmware/xiaozhi-esp32/main/boards/otto-robot/config.json) |
 
-板型默认根据 GPIO15/16 电平识别，随后单独探测摄像头。没有插摄像头不等于无摄像头版主板；实际板型、引脚和机械行程需结合实物核对，步骤见[装配与校准](../hardware/ASSEMBLY.md)。
+板型默认根据 GPIO15/16 电平识别，随后单独探测摄像头。板卡接线与机械校准步骤见[装配与校准](../hardware/ASSEMBLY.md)。
 
 ## 启动与语音
 
