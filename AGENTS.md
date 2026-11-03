@@ -18,7 +18,7 @@
 ## 文档索引
 
 - 开发、提交、来源和验证规则：`CONTRIBUTING.md`
-- 产品定义与用户研究：`docs/PRODUCT.md`
-- 商业价值与商业化路径：`docs/BUSINESS.md`
-- 技术选型与接入依据：`docs/RESEARCH.md`
+- 产品范围与商业思考：`docs/PRODUCT.md`
+- 固件构建、接入与来源：`firmware/README.md`
+- 硬件准备、装配与校准：`hardware/ASSEMBLY.md`
 - 系统架构与安全：`docs/ARCHITECTURE.md`

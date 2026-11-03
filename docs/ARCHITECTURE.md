@@ -1,82 +1,63 @@
 # 系统架构
 
-> 各功能当前状态见文末「实现状态」；与原版的范围对比见 [PRODUCT.md](PRODUCT.md)「与原版 Microduck 的对比」。
+本文说明仓库固件的运行链路、动作接口和验证状态。固件来源见[来源与许可](../firmware/README.md#来源与许可)，实拍样机与仓库构建版本的区别见[演示与仓库固件](../firmware/README.md#演示与仓库固件)。
 
-## 运行拓扑
-
-```text
-灵矽云端
-  ├─ OTA 激活、设备绑定、WSS token
-  ├─ ASR / LLM / TTS
-  └─ MCP tools/list、tools/call
-          │ WSS + Opus
-          ▼
-ESP32-S3 固件
-  ├─ WebSocket 与音频编解码
-  ├─ 设备 MCP Server
-  ├─ 动作白名单、参数校验和停止逻辑
-  ├─ 6 舵机动作控制与状态
-  └─ 屏幕、按键、电池和状态显示
-          │
-          ▼
-六舵机玩具本体＋FlashDuck/Otto 打印结构
-```
-
-## 模块划分
-
-| 模块 | 职责 |
-| --- | --- |
-| 云端语音服务 | ASR、LLM、TTS、全双工 VAD 和设备 MCP 调用 |
-| 网络与协议 | OTA、WSS、Opus 收发、会话状态 |
-| 板级适配 | 屏幕、音频 Codec、I2C、按键、电源和舵机引脚 |
-| 动作控制 | 固定步态、动作状态、校准和 HOME |
-| 安全控制 | 断网停止、动作超时、实体键停步、参数限幅 |
-| 产品界面 | 表情、状态、聊天文本和电量显示 |
-| 外壳与装配 | 玩具组装、打印壳、紧固件和装配说明 |
-
-各模块的来源、上游版本与许可边界统一记录在 [RESEARCH.md](RESEARCH.md)「接入基线」与「许可与来源」。
-
-## 启动与绑定
-
-1. 设备创建配网热点，用户通过手机配置 Wi-Fi。
-2. 设备请求灵矽 OTA：`https://xrobo.qiniuapi.com/v1/ota/`。
-3. 未绑定设备获得激活码，用户在灵矽控制台完成绑定。
-4. 设备再次请求 OTA，取得 WebSocket 地址和 token。
-5. 设备携带 `Authorization`、`Device-Id`、`Client-Id`、`Protocol-Version` 建立 WSS。
-6. 设备发送 `hello`，声明 Opus 16 kHz 单声道、MCP 与 AEC 能力协商。
-
-## 语音链路
+## 运行链路
 
 ```text
-麦克风 PCM ─── AEC ─── Opus ─── WSS 上行 ─── 灵矽 ASR/LLM
-                ▲                                │
-播放 PCM ─────┤（软件参考信号）                  │
-                                                 ▼
-TTS Opus ←── WSS 下行 ←───────────────────── 服务端 VAD
+用户语音
    │
-   └→ 扬声器
+   ▼
+ESP32-S3：采音、音频处理、Opus 编码
+   │ WSS
+   ▼
+灵矽：ASR → LLM → TTS
+   │             │
+   │ MCP 调用    └── 音频返回设备播放
+   ▼
+设备 MCP Server → 动作与参数校验 → 本地步态/头嘴控制 → 舵机
 ```
 
-三种会话模式复用同一条 WSS 链路，由菜单/按键切换：
+灵矽是现有云端服务，仓库不包含服务端实现。小智固件提供网络、音频和设备 MCP 框架，导入的分支已包含 Otto 板级适配与运动控制；本项目在此基础上增加鸭形适配、交互调整和动作保护。
 
-| 模式 | 收音方式 | 打断方式 |
+## 模块与代码入口
+
+| 模块 | 职责与本项目改动 | 代码入口 |
 | --- | --- | --- |
-| Manual（按住说话） | 按键按住时上行 | 松手即发送；播报中按键打断 |
-| Auto（自动对话） | 端到端 VAD 检测 | 说一句回一句，人声打断 |
-| Realtime（全双工） | 麦克风常开上行 | 服务端检测人声打断；设备端 AEC 抑制自打断 |
+| 会话与按键 | 沿用小智会话状态机，增加板级模式切换、PTT 接管与恢复、播放中止处理 | [application.cc](../firmware/xiaozhi-esp32/main/application.cc)、[otto_robot.cc](../firmware/xiaozhi-esp32/main/boards/otto-robot/otto_robot.cc) |
+| 音频参考 | 将播放 PCM 转为设备端 AEC 的参考输入，处理重采样、缓冲和延迟 | [otto_audio_codec.h](../firmware/xiaozhi-esp32/main/boards/otto-robot/otto_audio_codec.h)、[otto_audio_codec.cc](../firmware/xiaozhi-esp32/main/boards/otto-robot/otto_audio_codec.cc) |
+| 普通 Otto 动作 | 在上游运动控制基础上收紧云端动作集合，增加互斥、超时和停止路径 | [otto_controller.cc](../firmware/xiaozhi-esp32/main/boards/otto-robot/otto_controller.cc) |
+| 鸭形动作 | 新增头嘴控制、独立限位与校准、动作编排和合作式停止，腿脚复用 Otto 运动实现 | [duck_controller.cc](../firmware/xiaozhi-esp32/main/boards/otto-robot/duck_controller.cc)、[otto_movements.cc](../firmware/xiaozhi-esp32/main/boards/otto-robot/otto_movements.cc) |
+| 显示 | 在原屏幕显示上增加状态和小窗口单眼布局 | [otto_emoji_display.cc](../firmware/xiaozhi-esp32/main/boards/otto-robot/otto_emoji_display.cc) |
+| 板型与构建 | 选择板卡引脚；同一板级目录提供 `otto-robot`、`otto-duck` 两个构建变体 | [config.h](../firmware/xiaozhi-esp32/main/boards/otto-robot/config.h)、[config.json](../firmware/xiaozhi-esp32/main/boards/otto-robot/config.json) |
 
-“软件播放参考”是把送往喇叭的数字音频复制一份，连同麦克风输入一起交给设备端 AEC（声学回声消除）。算法据此估计并抑制小鸭自己的声音，尽量保留用户说话；它不是额外的语音服务或代码仓库。
-参考流已经接入代码，但播放延迟、喇叭失真和壳体声学耦合仍需真机验证。此前原 Otto 固件的回声和自打断问题尚未解决，本次鸭形固件尚未验收；不能把接入参考信号写成“已解决回声”。自打断指设备把自身播报误当作用户插话，导致自己停止播报。实体键提供独立于语音的本地中止入口。
+板型默认根据 GPIO15/16 电平识别，随后单独探测摄像头。板卡接线与机械校准步骤见[装配与校准](../hardware/ASSEMBLY.md)。
 
-## 主动交互（后续设计，尚未实现）
+## 启动与语音
 
-可先接入任务完成或用户主动选择的状态事件，由规则检查事件时效、免打扰和触发间隔，再交给灵矽生成简短回应并调用设备允许的动作。后端能否主动向当前设备发起语音和动作仍需联调验证，仅修改提示词不会产生触发事件。
+设备先通过热点配网，再请求灵矽 OTA 获取激活信息。完成控制台绑定后，设备取得 WSS 地址和 token，携带设备标识建立连接，并通过 `hello` 协商音频格式与工具能力。接入地址与协议资料统一见[固件说明](../firmware/README.md#来源与许可)。
 
-穿戴数据可在授权后经手机桥接，需单独验证具体平台、品牌、同步时效和后台限制。心率、睡眠或压力只能作为状态线索，不能直接判定用户情绪。
+```text
+麦克风 → AFE（AEC/VAD）→ Opus → WSS → 灵矽 ASR/LLM
+扬声器 ← PCM/I2S ← Opus 解码 ← WSS ← 灵矽 TTS
+           └── 播放 PCM 软件参考 → AFE
+```
+
+AEC（声学回声消除）复用既有 AFE 音频处理框架。本项目把送往扬声器的数字音频复制为参考流，供算法估计自身播报的回声，并修复参考流的重采样和缓冲问题。软件参考接通不等于声学效果达标：播放延迟、喇叭失真和壳体耦合仍影响回声与自打断。
+
+三种会话模式来自上游。本项目增加板级切换与 PTT（按住说话）适配，并修复接管、松手和模式恢复的时序。
+
+| 模式 | 收音行为 | 播放与中止 |
+| --- | --- | --- |
+| Manual | 显式开始和结束收音；PTT 按住期间流式上传，松手发送结束收音消息 | 按键可中止播报并接管收音 |
+| Auto | 自动结束一轮收音，播报结束后继续监听 | 播报时关闭普通语音上行；可通过按键或支持的唤醒词中止 |
+| Realtime | 对话中持续上传麦克风，播报时保持收音 | 处理服务端打断消息，并有本地 AEC 后 VAD 打断路径；效果仍待真机验收 |
+
+自打断指设备把自身播报误当作用户插话，导致停止播报。目前原 Otto 样机仍存在该问题；鸭形固件尚未完成声学验收。实体键提供独立于语音识别的本地中止入口。
 
 ## MCP 动作接口
 
-云端通过标准 `tools/call` 请求动作：
+云端通过 `tools/call` 选择设备提供的动作，例如：
 
 ```json
 {
@@ -89,7 +70,7 @@ TTS Opus ←── WSS 下行 ←───────────────�
       "name": "self.otto.action",
       "arguments": {
         "action": "walk",
-        "steps": 3,
+        "steps": 1,
         "speed": 1200,
         "direction": 1
       }
@@ -98,70 +79,62 @@ TTS Opus ←── WSS 下行 ←───────────────�
 }
 ```
 
-可控动作：`walk / turn / sit / swing / hand_wave / greeting / home`。系统工具：`self.otto.stop / self.otto.get_status / self.battery.get_level`。校准与辅助工具：`self.otto.set_trim / self.otto.get_trims / self.otto.get_ip`。任意舵机序列工具默认不注册，固件中不含其描述字符串。
-
-`otto-duck` 变体使用 linx 链路，同时提供 `self.otto.*` 与 `self.flashduck.*`
-两组指向同一控制器的工具名，兼容 Otto 工具调用和鸭形提示词。支持的动作包括
-`walk / turn / jump / swing / updown / sit / home / head_turn / head_shake / look_around /
-quack / chatter / curious / preen / happy_waddle / stretch / dance / peck / yawn / sleepy`，
-不接受旧手臂动作或任意舵机序列。`sit` 和 `head_turn` 保持姿态，`home` 归位。
-`steps` 为 1–10（`quack / chatter` 最多 3 次），实际 `speed` 限制在 800–2000ms，
-`amount` 按头嘴或腿脚的范围进一步限制。`walk / turn` 的 `direction` 必须为 ±1；
-`head_turn` 的 0 表示回正。
-一次只接收一个命令，不排队；错误按 MCP `isError` 返回。校准 `set_trim`
-只接受六个已知关节名及 ±10°，同样经过忙碌检查和工作任务。
-返回成功表示接收，`get_status` 为 `moving/idle/stopped/timeout/disabled`，
-不能据此宣称实物已经到位。
-
-鸭形停止采用合作式取消，不删除工作任务、不自动归位；头嘴和腿脚动作检查取消标志，
-工作任务确认结束前仍拒绝新动作。30 秒计时包含待执行时间。
-行走和转向采用可配置的宽站距参数；初值参考 FlashDuck 的公开步态说明，
-与官方固件的 NVS 调参数据互不通用，行走时也尚未实现同步摆头。
-摇头按 `amount` 控制中位两侧的幅度并平滑往返，最大幅度仍受机械配置限制。
-舞蹈保留前后各两步，侧头最多 ±14°，包含最后居中的嘴部动作；
-舞蹈步态周期为 800–1000ms（数值越小越快），默认次数仍为一次。
-这些编排参考 FlashDuck 当前动作设计，但头腿同步方式、归位时长和最终实物效果仍有差异。
-头嘴的最终 PWM 角度在微调之后再次限幅，原板引脚冲突时不初始化舵机。
-该变体尚未完成真机验收，动作和眼睛效果不能由官方固件的视频代为证明；
-窗口与机械参数见 [装配与校准](../hardware/ASSEMBLY.md)。
-
-## 动作与安全
-
-云端只选择动作和参数，舵机时序始终由本地执行。以下是原 `otto-robot` 的设计目标，
-停止时延仍需真机验收；`otto-duck` 的停止语义以上节为准：
-
-- 单次最多 10 步，速度 800–2000ms，幅度 0–60。
-- 同时只接受一个动作；执行中再次调用返回 busy。
-- 云端不得发送任意舵机角度序列。
-- `self.otto.stop` 不受 busy 限制；500ms 内停止步态，2 秒内完成归位。
-- 动作中短按实体键优先停步；空闲时按键仍用于对话控制。
-- 单个动作最长 30 秒，超时后停止、清空队列并归位。
-- WSS 断开后 2 秒内停止步态、清空队列并归位；重连不恢复旧动作。
-
-| 职责 | 灵矽云端 | 设备本地 |
+| 构建变体 | 动作工具 | 动作范围 |
 | --- | --- | --- |
-| 语音识别和生成 | 是 | 采集与播放 |
-| 理解自然语言 | 是 | 否 |
-| 选择动作和参数 | 是 | 白名单与范围校验 |
-| 舵机时序与步态 | 否 | 是 |
-| 停止、限位和故障处理 | 可触发停止意图 | 最终执行 |
-| 断网安全 | 不可依赖 | 是 |
+| `otto-robot` | `self.otto.action` | `walk`、`turn`、`sit`、`swing`、`hand_wave`、`greeting`、`home` |
+| `otto-duck` | `self.otto.action`、`self.flashduck.action` | 下列 20 种鸭形动作 |
+
+- 移动与姿态：`walk`、`turn`、`jump`、`swing`、`updown`、`sit`、`home`。
+- 头嘴动作：`head_turn`、`head_shake`、`look_around`、`quack`、`chatter`。
+- 组合动作：`curious`、`preen`、`happy_waddle`、`stretch`、`dance`、`peck`、`yawn`、`sleepy`。
+
+鸭形的 `self.otto.*` 与 `self.flashduck.*` 指向同一个控制器，用于兼容已有工具调用和鸭形提示词。两组名称不代表两套固件。鸭形不接受旧手臂动作，也不接受任意舵机序列。
+
+| 参数 | 普通 Otto | 鸭形 |
+| --- | --- | --- |
+| `steps` | 1–10，默认 3 | 1–10，默认 1；`quack/chatter` 最多 3 次 |
+| `speed` | 800–2000ms，数值越小越快 | 实际执行收紧至 800–2000ms；舞蹈周期进一步限制为 800–1000ms |
+| `amount` | 0–60；`arm_swing` 同范围 | 0–30，再按头嘴和腿脚范围限幅 |
+| `direction` | 1 为前进/左转，-1 为后退/右转 | 行走/转向只接受 ±1；`head_turn` 的 0 表示回正 |
+
+辅助工具包括 `stop`、`get_status`、`set_trim`、`get_trims`、`get_ip`，以及 `self.battery.get_level`。鸭形辅助工具同样提供两组前缀。
+
+校准接口按结构区分：普通 Otto 使用四个腿脚与 `left_hand/right_hand`，微调范围为 ±50°；鸭形改为 `mouth/neck`，微调范围为 ±10°，空闲时才接受，经工作任务保存并归位。鸭形校准独立存储，头嘴最终输出在微调后再次限幅。校准应按装配步骤逐关节进行。
+
+控制器接受动作请求，只表示安排执行，不等于实物已经到位。普通 Otto 状态为 `moving/idle`；鸭形状态为 `moving/idle/stopped/timeout/disabled`。鸭形的 `sit`、`head_turn` 会保持姿态，需要归位时调用 `home`。
+
+鸭形动作拒绝通过 JSON-RPC `error` 返回；普通 Otto 的部分拒绝以错误文本返回，`result.isError` 仍为 `false`。调用方需同时处理 JSON-RPC 错误和结果中的拒绝文本，不能仅凭 `isError` 判断动作已受理。
+
+## 动作保护
+
+动作时序在设备端执行，云端动作调用经过白名单和参数校验。`action` 请求执行中拒绝新动作；停止入口不受该忙状态限制。默认构建不注册任意舵机序列工具。
+
+| 保护路径 | 普通 Otto | 鸭形 |
+| --- | --- | --- |
+| 停止 | 中止动作、清空队列并归位 | 合作式取消并保持当前位置；工作任务结束前仍拒绝新动作 |
+| 超时 | 30 秒 watchdog，触发停止和归位 | 30 秒期限包含待执行时间，触发取消 |
+| 断网 | 触发本地停止，重连不恢复旧动作 | 触发本地取消，重连不恢复旧动作 |
+| 实体键 | 动作中按键优先停步 | 动作中按下优先请求取消 |
+| 引脚与限位 | 使用板级引脚配置和动作参数范围 | 舵机引脚冲突时不初始化动作；头嘴使用独立机械限位 |
+
+这些是代码中的保护路径，不能替代机械行程和停止时延的实测。穿戴设备、外部任务事件等主动交互尚未实现，后续方向见[产品与商业思考](PRODUCT.md)。
 
 ## 实现状态
 
-- 上游基线：`txp666/xiaozhi-esp32@fb7f815` 完整导入并校验，`v0` 标签。
-- 构建：ESP-IDF v6.1.0，`esp32s3`；最近一轮 Otto 和鸭形变体的构建、主机测试记录见下方。
-- 原 Otto 固件此前的灵矽链路：OTA 激活、WSS 会话、MCP 动作调用真机已通，三种对话模式可切换。
-- 原 Otto 固件此前已烧录设备端 AEC，但真机回声与自打断问题尚未解决；本次鸭形适配和 FlashDuck 演示不作为自有固件的 AEC 验收。
-- 舵机：此前记录过左脚槽位排针问题；当前样机运行 FlashDuck 官方固件，已实拍多个语音动作，不能据此认定自有固件的六路动作均已验收。
-- 断网停步、30 秒 watchdog、参数限幅：已实现。
-- 2026-11-02 鸭形适配：新增 `otto-duck` 变体、独立头嘴限位与校准、
-  合作式停止和可配置单眼窗口；原 `otto-robot` 与鸭形变体均完成 ESP-IDF 6.1 构建。
-  真机引脚、打印件行程、实际停止时延、窗口可读性尚未验证。
-- 2026-11-03 代码检查：修复软件音频参考重采样越界、首块丢失和满缓冲读写竞争；
-  修复 PTT 的长按附加单击、连接中松手后继续监听、manual 模式接管与恢复时序；
-  修复原 Otto 控制器的动作入队 busy 竞态。新增回归先复现旧问题，再验证修复。
-  主机测试运行 136 项，133 项通过、3 项跳过；跳过原因是本机缺少 cJSON/mbedTLS
-  开发头及资源编码测试的 Python 依赖。音频专项 ASan、TSan 检查通过；
-  `otto-robot`、`otto-duck` 均通过 ESP-IDF 6.1 构建。本轮未烧录，真机动作、PTT 和 AEC 效果仍待验收。
-- 工程闭环：参赛者负责需求、装配和授权烧录，AI 代理负责定位改动、编码、烧录命令、日志分析和硬件隔离实验，每轮按"需求 → 实现 → 编译 → 授权烧录 → 三方对账"迭代。
+验证记录截至 2026-11-03，区分实物演示、源码测试和构建结果。
+
+| 范围 | 已有证据 | 尚未验证或仍存在的问题 |
+| --- | --- | --- |
+| 上游基线 | `txp666/xiaozhi-esp32@fb7f815` 完整导入并校验，建立 `v0` 标签 | 后续新增能力以各次验证记录为准 |
+| 原 Otto 语音链路 | 此前已在实物上跑通 OTA 激活、WSS 会话、MCP 调用和模式切换 | 设备端 AEC 已烧录，但回声与自打断尚未解决 |
+| 实拍样机 | 已完成装配和多个语音动作演示 | 视频运行版本见[演示与仓库固件](../firmware/README.md#演示与仓库固件)，不能作为仓库鸭形固件的验收结果 |
+| 鸭形适配 | 2026-11-02 完成独立构建变体、头嘴控制、限位、校准、停止和单眼窗口代码；两种变体构建通过 | 本次固件的实物板型/引脚、打印件行程、动作效果、窗口可读性待验收 |
+| 回归修复 | 2026-11-03 修复音频参考重采样越界、首块丢失、满缓冲读写竞争；修复 PTT 长按附加单击、连接中松手、manual 接管恢复；修复普通 Otto 入队 busy 竞态 | 本轮未烧录，动作、PTT 和 AEC 效果仍待真机验收 |
+
+2026-11-03 的本地验证结果：
+
+- `otto-robot`、`otto-duck` 均通过 ESP-IDF 6.1 构建，目标芯片为 `esp32s3`。
+- 主机测试运行 136 项，133 项通过、3 项跳过。跳过原因是缺少 cJSON/mbedTLS 开发头及资源编码测试的 Python 依赖。
+- 音频专项 ASan、TSan 检查通过；新增回归先复现旧问题，再验证修复。
+
+下一轮真机验收需记录停止时延、断网响应、30 秒超时、各关节实际行程和音频打断效果。此前提出的“500ms 停步、2 秒归位/断网停止”尚无实测结果，不作为当前性能承诺。
