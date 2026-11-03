@@ -2,6 +2,10 @@
     Otto机器人控制器 - MCP协议版本
 */
 
+#include "sdkconfig.h"
+
+#if !CONFIG_OTTO_DUCK_BODY
+
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <cJSON.h>
@@ -43,6 +47,23 @@ private:
     esp_timer_handle_t action_watchdog_timer_ = nullptr;
     bool has_hands_ = false;
     std::atomic<bool> is_action_in_progress_{false};
+
+    class ActionControlLock {
+    public:
+        explicit ActionControlLock(SemaphoreHandle_t mutex) : mutex_(mutex) {
+            if (mutex_ != nullptr)
+                xSemaphoreTake(mutex_, portMAX_DELAY);
+        }
+        ~ActionControlLock() {
+            if (mutex_ != nullptr)
+                xSemaphoreGive(mutex_);
+        }
+        ActionControlLock(const ActionControlLock&) = delete;
+        ActionControlLock& operator=(const ActionControlLock&) = delete;
+
+    private:
+        SemaphoreHandle_t mutex_;
+    };
 
     struct OttoActionParams {
         int action_type;
@@ -92,7 +113,6 @@ private:
             if (xQueueReceive(controller->action_queue_, &params, pdMS_TO_TICKS(1000)) == pdTRUE) {
                 ESP_LOGI(TAG, "执行动作: %d", params.action_type);
                 PowerManager::PauseBatteryUpdate();  // 动作开始时暂停电量更新
-                controller->is_action_in_progress_ = true;
                 if (controller->action_watchdog_timer_ != nullptr) {
                     esp_timer_stop(controller->action_watchdog_timer_);
                     esp_timer_start_once(controller->action_watchdog_timer_,
@@ -472,11 +492,15 @@ private:
                         }
                     }
                 }
-                if (controller->action_watchdog_timer_ != nullptr) {
-                    esp_timer_stop(controller->action_watchdog_timer_);
+                {
+                    ActionControlLock lock(controller->action_control_mutex_);
+                    if (controller->action_watchdog_timer_ != nullptr) {
+                        esp_timer_stop(controller->action_watchdog_timer_);
+                    }
+                    PowerManager::ResumeBatteryUpdate();
+                    controller->is_action_in_progress_ =
+                        uxQueueMessagesWaiting(controller->action_queue_) > 0;
                 }
-                controller->is_action_in_progress_ = false;
-                PowerManager::ResumeBatteryUpdate();  // 动作结束时恢复电量更新
                 vTaskDelay(pdMS_TO_TICKS(20));
             }
         }
@@ -487,6 +511,19 @@ private:
             xTaskCreate(ActionTask, "otto_action", 1024 * 3, this, configMAX_PRIORITIES - 1,
                         &action_task_handle_);
         }
+    }
+
+    bool EnqueueLocked(const OttoActionParams& params) {
+        // Reserve busy before the worker can remove the item from the queue.
+        const bool was_busy = is_action_in_progress_.exchange(true);
+        // Never wait for queue space while holding the completion/stop mutex.
+        if (xQueueSend(action_queue_, &params, 0) != pdTRUE) {
+            is_action_in_progress_ = was_busy;
+            ESP_LOGW(TAG, "动作队列已满，拒绝新动作");
+            return false;
+        }
+        StartActionTaskIfNeeded();
+        return true;
     }
 
     void QueueActionLocked(int action_type, int steps, int speed, int direction, int amount) {
@@ -506,18 +543,12 @@ private:
                  speed, direction, amount);
 
         OttoActionParams params = {action_type, steps, speed, direction, amount, ""};
-        xQueueSend(action_queue_, &params, portMAX_DELAY);
-        StartActionTaskIfNeeded();
+        EnqueueLocked(params);
     }
 
     void QueueAction(int action_type, int steps, int speed, int direction, int amount) {
-        if (action_control_mutex_ != nullptr) {
-            xSemaphoreTake(action_control_mutex_, portMAX_DELAY);
-        }
+        ActionControlLock lock(action_control_mutex_);
         QueueActionLocked(action_type, steps, speed, direction, amount);
-        if (action_control_mutex_ != nullptr) {
-            xSemaphoreGive(action_control_mutex_);
-        }
     }
 
     void StopActiveActionsLocked(const char* reason, bool stop_watchdog) {
@@ -529,30 +560,23 @@ private:
             vTaskDelete(action_task_handle_);
             action_task_handle_ = nullptr;
         }
-        is_action_in_progress_ = false;
         xQueueReset(action_queue_);
         PowerManager::ResumeBatteryUpdate();
 
         OttoActionParams home = {ACTION_HOME, 1, 1000, 1, 0, ""};
-        xQueueSend(action_queue_, &home, portMAX_DELAY);
-        StartActionTaskIfNeeded();
+        EnqueueLocked(home);
     }
 
     static void ActionWatchdogCallback(void* arg) {
         OttoController* controller = static_cast<OttoController*>(arg);
-        if (controller->action_control_mutex_ != nullptr) {
-            xSemaphoreTake(controller->action_control_mutex_, portMAX_DELAY);
-        }
+        ActionControlLock lock(controller->action_control_mutex_);
         controller->StopActiveActionsLocked("watchdog timeout", false);
-        if (controller->action_control_mutex_ != nullptr) {
-            xSemaphoreGive(controller->action_control_mutex_);
-        }
     }
 
-    void QueueServoSequence(const char* servo_sequence_json) {
+    bool QueueServoSequence(const char* servo_sequence_json) {
         if (servo_sequence_json == nullptr) {
             ESP_LOGE(TAG, "序列JSON为空");
-            return;
+            return false;
         }
 
         int input_len = strlen(servo_sequence_json);
@@ -561,12 +585,12 @@ private:
 
         if (input_len >= buffer_size) {
             ESP_LOGE(TAG, "JSON字符串太长！输入长度=%d，最大允许=%d", input_len, buffer_size - 1);
-            return;
+            return false;
         }
 
         if (input_len == 0) {
             ESP_LOGW(TAG, "序列JSON为空字符串");
-            return;
+            return false;
         }
 
         OttoActionParams params = {ACTION_SERVO_SEQUENCE, 0, 0, 0, 0, ""};
@@ -577,8 +601,8 @@ private:
 
         ESP_LOGD(TAG, "序列已加入队列: %s", params.servo_sequence_json);
 
-        xQueueSend(action_queue_, &params, portMAX_DELAY);
-        StartActionTaskIfNeeded();
+        ActionControlLock lock(action_control_mutex_);
+        return EnqueueLocked(params);
     }
 
     void LoadTrimsFromNVS() {
@@ -633,13 +657,8 @@ public:
     }
 
     void StopActiveActions() {
-        if (action_control_mutex_ != nullptr) {
-            xSemaphoreTake(action_control_mutex_, portMAX_DELAY);
-        }
+        ActionControlLock lock(action_control_mutex_);
         StopActiveActionsLocked("requested stop", true);
-        if (action_control_mutex_ != nullptr) {
-            xSemaphoreGive(action_control_mutex_);
-        }
     }
 
     bool IsMoving() const {
@@ -681,48 +700,49 @@ public:
                     action != "hand_wave" && action != "greeting" && action != "home") {
                     return "错误：云端只允许 walk, turn, sit, swing, hand_wave, greeting, home";
                 }
+                ActionControlLock lock(action_control_mutex_);
                 if (is_action_in_progress_.load() || uxQueueMessagesWaiting(action_queue_) > 0) {
                     return "错误：机器人正在执行动作，请稍后或先调用 self.otto.stop";
                 }
 
                 // 基础移动动作
                 if (action == "walk") {
-                    QueueAction(ACTION_WALK, steps, speed, direction, arm_swing);
+                    QueueActionLocked(ACTION_WALK, steps, speed, direction, arm_swing);
                     return true;
                 } else if (action == "turn") {
-                    QueueAction(ACTION_TURN, steps, speed, direction, arm_swing);
+                    QueueActionLocked(ACTION_TURN, steps, speed, direction, arm_swing);
                     return true;
                 } else if (action == "jump") {
-                    QueueAction(ACTION_JUMP, steps, speed, 0, 0);
+                    QueueActionLocked(ACTION_JUMP, steps, speed, 0, 0);
                     return true;
                 } else if (action == "swing") {
-                    QueueAction(ACTION_SWING, steps, speed, 0, amount);
+                    QueueActionLocked(ACTION_SWING, steps, speed, 0, amount);
                     return true;
                 } else if (action == "moonwalk") {
-                    QueueAction(ACTION_MOONWALK, steps, speed, direction, amount);
+                    QueueActionLocked(ACTION_MOONWALK, steps, speed, direction, amount);
                     return true;
                 } else if (action == "bend") {
-                    QueueAction(ACTION_BEND, steps, speed, direction, 0);
+                    QueueActionLocked(ACTION_BEND, steps, speed, direction, 0);
                     return true;
                 } else if (action == "shake_leg") {
-                    QueueAction(ACTION_SHAKE_LEG, steps, speed, direction, 0);
+                    QueueActionLocked(ACTION_SHAKE_LEG, steps, speed, direction, 0);
                     return true;
                 } else if (action == "updown") {
-                    QueueAction(ACTION_UPDOWN, steps, speed, 0, amount);
+                    QueueActionLocked(ACTION_UPDOWN, steps, speed, 0, amount);
                     return true;
                 } else if (action == "whirlwind_leg") {
-                    QueueAction(ACTION_WHIRLWIND_LEG, steps, speed, 0, amount);
+                    QueueActionLocked(ACTION_WHIRLWIND_LEG, steps, speed, 0, amount);
                     return true;
                 }
                 // 固定动作
                 else if (action == "sit") {
-                    QueueAction(ACTION_SIT, 1, 0, 0, 0);
+                    QueueActionLocked(ACTION_SIT, 1, 0, 0, 0);
                     return true;
                 } else if (action == "showcase") {
-                    QueueAction(ACTION_SHOWCASE, 1, 0, 0, 0);
+                    QueueActionLocked(ACTION_SHOWCASE, 1, 0, 0, 0);
                     return true;
                 } else if (action == "home") {
-                    QueueAction(ACTION_HOME, 1, 1000, 1, 0);
+                    QueueActionLocked(ACTION_HOME, 1, 1000, 1, 0);
                     return true;
                 }
                 // 手部动作
@@ -730,61 +750,61 @@ public:
                     if (!has_hands_) {
                         return "错误：此动作需要手部舵机支持";
                     }
-                    QueueAction(ACTION_HANDS_UP, 1, speed, direction, 0);
+                    QueueActionLocked(ACTION_HANDS_UP, 1, speed, direction, 0);
                     return true;
                 } else if (action == "hands_down") {
                     if (!has_hands_) {
                         return "错误：此动作需要手部舵机支持";
                     }
-                    QueueAction(ACTION_HANDS_DOWN, 1, speed, direction, 0);
+                    QueueActionLocked(ACTION_HANDS_DOWN, 1, speed, direction, 0);
                     return true;
                 } else if (action == "hand_wave") {
                     if (!has_hands_) {
                         return "错误：此动作需要手部舵机支持";
                     }
-                    QueueAction(ACTION_HAND_WAVE, 1, 0, 0, direction);
+                    QueueActionLocked(ACTION_HAND_WAVE, 1, 0, 0, direction);
                     return true;
                 } else if (action == "windmill") {
                     if (!has_hands_) {
                         return "错误：此动作需要手部舵机支持";
                     }
-                    QueueAction(ACTION_WINDMILL, steps, speed, 0, amount);
+                    QueueActionLocked(ACTION_WINDMILL, steps, speed, 0, amount);
                     return true;
                 } else if (action == "takeoff") {
                     if (!has_hands_) {
                         return "错误：此动作需要手部舵机支持";
                     }
-                    QueueAction(ACTION_TAKEOFF, steps, speed, 0, amount);
+                    QueueActionLocked(ACTION_TAKEOFF, steps, speed, 0, amount);
                     return true;
                 } else if (action == "fitness") {
                     if (!has_hands_) {
                         return "错误：此动作需要手部舵机支持";
                     }
-                    QueueAction(ACTION_FITNESS, steps, speed, 0, amount);
+                    QueueActionLocked(ACTION_FITNESS, steps, speed, 0, amount);
                     return true;
                 } else if (action == "greeting") {
                     if (!has_hands_) {
                         return "错误：此动作需要手部舵机支持";
                     }
-                    QueueAction(ACTION_GREETING, steps, 0, direction, 0);
+                    QueueActionLocked(ACTION_GREETING, steps, 0, direction, 0);
                     return true;
                 } else if (action == "shy") {
                     if (!has_hands_) {
                         return "错误：此动作需要手部舵机支持";
                     }
-                    QueueAction(ACTION_SHY, steps, 0, direction, 0);
+                    QueueActionLocked(ACTION_SHY, steps, 0, direction, 0);
                     return true;
                 } else if (action == "radio_calisthenics") {
                     if (!has_hands_) {
                         return "错误：此动作需要手部舵机支持";
                     }
-                    QueueAction(ACTION_RADIO_CALISTHENICS, 1, 0, 0, 0);
+                    QueueActionLocked(ACTION_RADIO_CALISTHENICS, 1, 0, 0, 0);
                     return true;
                 } else if (action == "magic_circle") {
                     if (!has_hands_) {
                         return "错误：此动作需要手部舵机支持";
                     }
-                    QueueAction(ACTION_MAGIC_CIRCLE, 1, 0, 0, 0);
+                    QueueActionLocked(ACTION_MAGIC_CIRCLE, 1, 0, 0, 0);
                     return true;
                 } else {
                     return "错误：无效的动作名称。可用动作：walk, turn, jump, swing, moonwalk, "
@@ -853,8 +873,7 @@ public:
                 std::string sequence = properties["sequence"].value<std::string>();
                 // 检查是否是JSON对象（可能是字符串格式或已解析的对象）
                 // 如果sequence是JSON字符串，直接使用；如果是对象字符串，也需要使用
-                QueueServoSequence(sequence.c_str());
-                return true;
+                return QueueServoSequence(sequence.c_str());
             });
         }
 
@@ -1014,3 +1033,5 @@ void StopOttoActions() {
 }
 
 bool IsOttoMoving() { return g_otto_controller != nullptr && g_otto_controller->IsMoving(); }
+
+#endif  // !CONFIG_OTTO_DUCK_BODY
