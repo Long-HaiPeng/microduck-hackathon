@@ -120,6 +120,7 @@ class StartupWakeWordHintTests(unittest.TestCase):
             };
             class Display {
             public:
+                bool WantsStartupWakeWordHint() const { return true; }
                 std::string status = "Standby";
                 std::vector<std::pair<std::string, std::string>> messages;
                 void SetChatMessage(const char* role, const char* content) {
