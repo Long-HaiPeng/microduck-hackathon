@@ -1,42 +1,46 @@
 # Microduck-Inspired Biped Voice Robot
 
-基于六舵机双足玩具和可打印鸭壳的桌面机器人。灵矽负责 ASR、LLM、TTS，设备通过 MCP 工具调用执行本地动作。
+基于六舵机双足玩具和可打印鸭壳的桌面机器人。本项目固件基于小智/Otto 二次开发，灵矽负责 ASR、LLM、TTS，设备通过 MCP 工具调用执行本地动作。
 
-**Demo**：[《复刻 Micro Duck（仅实现半成品）并接入灵矽》](https://www.bilibili.com/video/BV1Gznf6VEm2)（B 站，4 分 20 秒）
+**实物演示**：[观看约 47 秒 Demo](docs/media/demo.mp4)。展示小鸭接入灵矽后，通过语音控制摇头、跳舞、坐下和归位的效果。视频采用 MP4（H.264/AAC），可下载播放；版本与验证范围见[演示与仓库固件](firmware/README.md#演示与仓库固件)。
 
 ## 状态
 
-上游固件已完整导入并合入 `main`（`v0` 基线），实体设备完成多轮真机烧录，灵矽语音链路真机已打通。当前工作：舵机槽位硬件修复。
+上游小智/Otto 固件已完整导入并合入 `main`（`v0` 基线）。最新实拍样机已装配并接入灵矽，展示了语音触发的多个动作。
+
+仓库另行开发 `otto-duck` 固件变体：脖子/嘴巴独立控制、限位、小窗口单眼显示。
+该变体已完成构建和主机测试，实际板卡引脚、动作行程和真机联动仍待验收；
+路演实拍不能作为该变体的验收结果。构建和校准方式见 [hardware/ASSEMBLY.md](hardware/ASSEMBLY.md)。
 
 | 项目 | 状态 |
 | --- | --- |
-| 硬件 | ESP32-S3、屏幕、电池、充电均正常；舵机槽位/排针修复中 |
-| 固件 | 灵矽接入、动作安全、断网停步、30 秒 watchdog、三种对话模式、设备端 AEC 已实现 |
-| 构建与测试 | ESP-IDF 6.1 构建通过，主机测试 130 通过；见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)「实现状态」 |
-| 语音链路 | 灵矽 OTA/WSS/MCP 真机已通，OTA 双环境切换已实现 |
+| 路演样机 | 已装配并接入灵矽，实拍了语音触发的多个动作 |
+| 仓库固件 | 小智/Otto 基线及 `otto-duck` 变体；动作保护、设备端 AEC 等已有代码，鸭形变体待真机验收 |
+| 构建与测试 | Otto、鸭形变体均通过 ESP-IDF 6.1 构建；主机测试运行 136 项，133 项通过、3 项跳过 |
+| 已知限制 | 自有固件的回声与自打断尚未解决；实际板卡引脚及鸭形机械行程待核对 |
 
-## 首版功能
+## 仓库固件功能
 
 - 灵矽 OTA 激活与 WSS 语音对话
-- 前进、后退、左转、右转、坐下、摇摆、挥手
+- 原 Otto 变体提供前进、后退、转向、坐下、摇摆和挥手；鸭形变体提供行走、转向、转头、摇头、张合嘴和归位，具体真机表现待验收
 - 云端 LLM 通过 MCP 选择设备动作
-- 动作白名单、限步数、限速和单动作队列
-- TTS 播放期间保持麦克风上行，用户可直接说话打断；实体键也能立即中止播报
+- 动作白名单、限步数、限速和单动作互斥
+- TTS 播放期间可保持麦克风上行；真机 AEC 回声与自打断问题尚待解决，不能视为稳定全双工验收
 
 ## 目标硬件配置
 
-基于自行组装的六舵机双足玩具（Otto 结构），加装 3D 打印鸭形外壳。Otto/闪猫侠套件作为备选。设备已核对：可进入烧录模式（按住 BOOT 上电）、屏幕与音频正常、原厂链路可接灵矽。
+基于六舵机双足套件，加装 FlashDuck 3D 打印鸭壳。仓库固件支持自动识别摄像头版和无摄像头版配置，实际主板型号与引脚仍需结合实物和启动日志核对。
 
 ```text
-ESP32-S3-WROOM N16R8
+ESP32-S3（具体模组与板型待核对）
 └─ 兼容 otto-robot 的控制板
-   ├─ 6 × SG90/MG90S 180°
+   ├─ 6 × 舵机（型号与行程以实物为准）
    ├─ 1.54" LCD
-   ├─ I2S 麦克风 + MAX98357A + 4Ω/3W 扬声器
+   ├─ 麦克风与扬声器（音频方案按实物核对）
    └─ 电池、开关、USB-C
 ```
 
-本台实际支出约 ¥270（玩具＋打印＋运费）。详细清单见 [hardware/BOM.md](hardware/BOM.md)，装配与校准见 [hardware/ASSEMBLY.md](hardware/ASSEMBLY.md)。
+此前记录的玩具、打印和运费约 ¥270，尚未计入后续采购及人工等完整成本。详细清单见 [hardware/BOM.md](hardware/BOM.md)，装配与校准见 [hardware/ASSEMBLY.md](hardware/ASSEMBLY.md)。
 
 ## 运行链路
 
@@ -57,15 +61,14 @@ ESP32-S3 → 本地动作校验 → Otto 步态 → 舵机
 
 ## 构建与烧录
 
-源码已入库。激活 ESP-IDF 6.1 后，从 `firmware/xiaozhi-esp32/` 构建：
+激活 ESP-IDF 6.1 后，从 `firmware/xiaozhi-esp32/` 构建鸭形变体：
 
 ```bash
 cd firmware/xiaozhi-esp32
-python scripts/build.py otto-robot --name otto-robot
-idf.py -p /dev/cu.usbmodemXXXX flash monitor
+python3 scripts/build.py otto-robot --name otto-duck --language zh-CN --wake-word wn9_xiaoyaxiaoya_tts2
 ```
 
-`scripts/build.py` 生成 `build/merged-binary.bin`。已复核的 commit、工具链和产物摘要见[系统架构](docs/ARCHITECTURE.md)「实现状态」。
+此命令选择“小鸭小鸭”唤醒模型，只构建、不烧录。省略 `--wake-word` 时，中文构建默认选择“你好小智”。切换固件前需先确认实物板型、引脚、舵机行程和恢复方式；实拍版本与本项目构建的区别见[演示与仓库固件](firmware/README.md#演示与仓库固件)。构建与验证记录见[系统架构](docs/ARCHITECTURE.md)「实现状态」。
 
 要求 ESP-IDF 6.1、ESP32-S3 N16R8 和支持数据传输的 USB-C。首次烧录时可能需要按住 BOOT 再上电。灵矽 OTA 默认为 `https://xrobo.qiniuapi.com/v1/ota/`。
 

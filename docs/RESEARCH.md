@@ -13,6 +13,8 @@
 
 软件保留语音、双足移动、转向、坐下和展示动作；不实现 15 舵机、强化学习、自主导航和视觉感知。
 
+最新实拍展示样机接入灵矽后的语音动作。下文的小智/Otto 接入基线描述仓库固件，自有 `otto-duck` 变体尚未完成真机验收；版本区别见[演示与仓库固件](../firmware/README.md#演示与仓库固件)。
+
 ## 平台选择
 
 | 方案 | 适用能力 | 限制 | 结论 |
@@ -28,7 +30,7 @@ ESP32-S3 方案复用 XiaoZhi 的音频、WebSocket、OTA 和 MCP 代码，并�
 | --- | --- |
 | 固件仓库 | <https://github.com/txp666/xiaozhi-esp32> |
 | 固定提交 | `fb7f8152628f07a3f1bca91c222d3bc8853b1f70` |
-| 板型 | `otto-robot`，无摄像头，6 舵机 |
+| 板型 | `otto-robot`，支持摄像头版与无摄像头版配置，6 舵机；实际板卡与引脚需核对 |
 | 工具链 | ESP-IDF 6.1 |
 | 灵矽 OTA | <https://xrobo.qiniuapi.com/v1/ota/> |
 | WebSocket 协议 | <https://linx.qiniu.com/docs/xrobot/platform/websocket> |
@@ -40,7 +42,7 @@ ESP32-S3 方案复用 XiaoZhi 的音频、WebSocket、OTA 和 MCP 代码，并�
 
 ## 全双工与语音打断
 
-灵矽 WebSocket 协议支持 `realtime` 模式：设备持续上传麦克风，服务端检测到人声后打断 AI 播报，并发送 `tts.stop(is_aborted=true)`。灵矽服务端不提供 AEC，回声消除由固件实现：扬声器回采作参考信号，在设备端消除自身播报的回声，收到被打断的停止消息后立即清空本地音频队列。
+灵矽 WebSocket 协议支持 `realtime` 模式：设备持续上传麦克风，服务端检测到人声后打断 AI 播报，并发送 `tts.stop(is_aborted=true)`。自有固件使用播放 PCM 的软件参考信号尝试设备端 AEC，并在收到打断消息后清空本地音频队列；实际回声与自打断问题尚未解决。
 
 ## 许可与来源
 
