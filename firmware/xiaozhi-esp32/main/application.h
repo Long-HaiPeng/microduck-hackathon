@@ -10,6 +10,7 @@
 #include <mutex>
 #include <deque>
 #include <memory>
+#include <optional>
 #include <functional>
 #include <cstdint>
 #include <vector>
@@ -116,7 +117,8 @@ public:
      * Stop listening (event-based, thread-safe)
      * Sends MAIN_EVENT_STOP_LISTENING to be handled in Run()
      */
-    void StopListening();
+    // An optional mode is restored by the main loop after it processes STOP.
+    void StopListening(std::optional<ListeningMode> restore_mode = std::nullopt);
 
     void Reboot();
     void WakeWordInvoke(const std::string& wake_word);
@@ -148,6 +150,8 @@ private:
     esp_timer_handle_t startup_wake_word_hint_timer_ = nullptr;
     DeviceStateMachine state_machine_;
     ListeningMode listening_mode_ = kListeningModeAutoStop;
+    // Protected by mutex_; consumed together with MAIN_EVENT_STOP_LISTENING.
+    std::optional<ListeningMode> stop_listening_restore_mode_;
     // true 时对话开始/唤醒沿用 listening_mode_，false 时重置为默认模式（上游行为）
     bool use_selected_listening_mode_ = false;
     AecMode aec_mode_ = kAecOff;

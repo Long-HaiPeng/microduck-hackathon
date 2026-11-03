@@ -47,9 +47,12 @@ private:
     bool is_camera_board_;
     bool has_camera_;
     OttoCameraType camera_type_;
-    // 长按对讲（PTT）：按下后短于该时长视为单击，达到该时长进入对讲
-    esp_timer_handle_t ptt_timer_ = nullptr;
+    // 长按对讲与驱动使用同一阈值，松开后不会再产生单击事件。
+    static constexpr uint16_t kPttHoldMs = 400;
     bool ptt_active_ = false;
+#if CONFIG_OTTO_DUCK_BODY
+    bool duck_stop_press_ = false;
+#endif
     // 用户双击选择的拾音模式（PTT 借用 manual 语义后据此恢复；单击对话开始前也会应用）
     ListeningMode persistent_mode_ = kListeningModeRealtime;
 
@@ -260,36 +263,40 @@ private:
     }
 
     void InitializeButtons() {
-        // 长按 PTT 判定定时器：按住 400ms 仍未松开则进入对讲模式
-        esp_timer_create_args_t ptt_timer_args = {
-            .callback = [](void* arg) { static_cast<OttoRobot*>(arg)->PttStart(); },
-            .arg = this,
-            .dispatch_method = ESP_TIMER_TASK,
-            .name = "ptt_timer",
-            .skip_unhandled_events = true,
-        };
-        ESP_ERROR_CHECK(esp_timer_create(&ptt_timer_args, &ptt_timer_));
-
         boot_button_.OnPressDown([this]() {
-            if (Application::GetInstance().GetDeviceState() == kDeviceStateStarting) {
+#if CONFIG_OTTO_DUCK_BODY
+            if (IsOttoMoving()) {
+                duck_stop_press_ = true;
+                StopOttoActions();
                 return;
             }
-            if (IsOttoMoving()) {
-                return;  // 动作执行中按键交给单击急停，不进入对讲
-            }
-            ptt_active_ = false;
-            esp_timer_stop(ptt_timer_);
-            esp_timer_start_once(ptt_timer_, 400 * 1000);
+#endif
         });
 
         boot_button_.OnPressUp([this]() {
-            esp_timer_stop(ptt_timer_);
             if (ptt_active_) {
                 PttStop();
             }
         });
 
+        boot_button_.OnLongPress([this]() {
+#if CONFIG_OTTO_DUCK_BODY
+            if (duck_stop_press_) {
+                // This whole hold was used to stop motion, not to start a chat.
+                duck_stop_press_ = false;
+                return;
+            }
+#endif
+            PttStart();
+        });
+
         boot_button_.OnDoubleClick([this]() {
+#if CONFIG_OTTO_DUCK_BODY
+            if (duck_stop_press_) {
+                duck_stop_press_ = false;
+                return;
+            }
+#endif
             auto& app = Application::GetInstance();
             if (app.GetDeviceState() == kDeviceStateStarting || ptt_active_) {
                 return;
@@ -313,6 +320,12 @@ private:
         });
 
         boot_button_.OnMultipleClick([this]() {
+#if CONFIG_OTTO_DUCK_BODY
+            if (duck_stop_press_) {
+                duck_stop_press_ = false;
+                return;
+            }
+#endif
             auto& app = Application::GetInstance();
             // 仅空闲态响应，避免对话/动作中误触重启
             if (app.GetDeviceState() != kDeviceStateIdle || ptt_active_) {
@@ -349,6 +362,13 @@ private:
         }, 3);
 
         boot_button_.OnClick([this]() {
+#if CONFIG_OTTO_DUCK_BODY
+            // Consume the click produced after an immediate press-down stop.
+            if (duck_stop_press_) {
+                duck_stop_press_ = false;
+                return;
+            }
+#endif
             auto& app = Application::GetInstance();
             if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
@@ -359,7 +379,7 @@ private:
                 return;
             }
             if (ptt_active_) {
-                return;  // 长按松开后附加的单击事件，忽略
+                return;
             }
             // 单击开启对话前先恢复双击选择的拾音模式：
             // 上游在对话开始时会把模式重置为默认，这里保住用户的选择
@@ -369,7 +389,7 @@ private:
     }
 
     void PttStart() {
-        if (ptt_active_) {
+        if (ptt_active_ || IsOttoMoving()) {
             return;
         }
         auto& app = Application::GetInstance();
@@ -389,9 +409,8 @@ private:
         }
         ptt_active_ = false;
         auto& app = Application::GetInstance();
-        app.StopListening();  // 停止采集并提交语音，回到 Idle
         // PTT 借用了 manual 会话语义，结束后恢复用户选择的拾音模式
-        app.SwitchListeningMode(persistent_mode_);
+        app.StopListening(persistent_mode_);
         ESP_LOGI(TAG, "PTT stop (release to send)");
     }
 
@@ -479,7 +498,7 @@ private:
 
 public:
     OttoRobot()
-        : boot_button_(BOOT_BUTTON_GPIO),
+        : boot_button_(BOOT_BUTTON_GPIO, false, kPttHoldMs),
           audio_codec_(nullptr),
           i2c_bus_(nullptr),
           camera_(nullptr),

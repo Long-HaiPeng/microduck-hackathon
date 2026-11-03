@@ -823,7 +823,11 @@ void Application::ToggleChatState() { xEventGroupSetBits(event_group_, MAIN_EVEN
 
 void Application::StartListening() { xEventGroupSetBits(event_group_, MAIN_EVENT_START_LISTENING); }
 
-void Application::StopListening() { xEventGroupSetBits(event_group_, MAIN_EVENT_STOP_LISTENING); }
+void Application::StopListening(std::optional<ListeningMode> restore_mode) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    stop_listening_restore_mode_ = restore_mode;
+    xEventGroupSetBits(event_group_, MAIN_EVENT_STOP_LISTENING);
+}
 
 void Application::HandleToggleChatEvent() {
     auto state = GetDeviceState();
@@ -919,13 +923,25 @@ void Application::HandleStartListeningEvent() {
             return;
         }
         SetListeningMode(kListeningModeManualStop);
-    } else if (state == kDeviceStateSpeaking) {
-        AbortSpeaking(kAbortReasonNone);
+    } else if (state == kDeviceStateSpeaking || state == kDeviceStateListening) {
+        if (state == kDeviceStateSpeaking) {
+            AbortSpeaking(kAbortReasonNone);
+        }
+        // A realtime session may already have the processor running. Explicitly
+        // notify the server of manual mode even when STATE_CHANGED will not start audio.
         SetListeningMode(kListeningModeManualStop);
+        pending_listening_start_ = false;
+        StartListeningAudio();
     }
 }
 
 void Application::HandleStopListeningEvent() {
+    std::optional<ListeningMode> restore_mode;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        restore_mode = stop_listening_restore_mode_;
+        stop_listening_restore_mode_.reset();
+    }
     auto state = GetDeviceState();
 
     if (state == kDeviceStateNotifying) {
@@ -933,12 +949,17 @@ void Application::HandleStopListeningEvent() {
     } else if (state == kDeviceStateAudioTesting) {
         audio_service_.EnableAudioTesting(false);
         SetDeviceState(kDeviceStateWifiConfiguring);
-        return;
+    } else if (state == kDeviceStateConnecting) {
+        // The queued continuation checks this state before opening the channel.
+        SetDeviceState(kDeviceStateIdle);
     } else if (state == kDeviceStateListening) {
         if (protocol_) {
             protocol_->SendStopListening();
         }
         SetDeviceState(kDeviceStateIdle);
+    }
+    if (restore_mode.has_value()) {
+        SwitchListeningMode(*restore_mode);
     }
 }
 
